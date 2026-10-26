@@ -207,11 +207,24 @@ fn open_dir_at(dfd: RawFd, name: &CString) -> io::Result<OwnedFd> {
 fn umask() -> u32 {
     static M: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
     *M.get_or_init(|| {
-        std::fs::read_to_string("/proc/self/status")
-            .ok()
-            .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Umask:").map(|v| v.trim().to_string())))
-            .and_then(|v| u32::from_str_radix(&v, 8).ok())
-            .unwrap_or(0o022)
+        // Linux: /proc/self/status reports the mask, so it is READ, never set.
+        // macOS has no such file and no getumask(2): reading it would mean
+        // calling umask(2), which SETS it for the whole process and races every
+        // other thread — exactly what this function exists to avoid. 022 is the
+        // macOS default for GUI launches (launchd), and it is also the value the
+        // Linux path falls back to, so new-file modes agree on both platforms.
+        #[cfg(target_os = "linux")]
+        {
+            std::fs::read_to_string("/proc/self/status")
+                .ok()
+                .and_then(|s| s.lines().find_map(|l| l.strip_prefix("Umask:").map(|v| v.trim().to_string())))
+                .and_then(|v| u32::from_str_radix(&v, 8).ok())
+                .unwrap_or(0o022)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            0o022
+        }
     })
 }
 
@@ -422,6 +435,26 @@ impl Vault {
             Err(e) => return Err(e),
         }
         let (fd_to, lt) = self.parent(to, true)?;
+        // macOS volumes are case-insensitive by default: "Note.md" and
+        // "note.md" are ONE directory entry, so O_EXCL on the target answers
+        // AlreadyExists for what is really a case-only rename. Same inode under
+        // the same case-folded name means exactly that (POSIX: renaming a name
+        // onto another name of the same file is a no-op), so renameat alone
+        // performs it; a different file keeps the O_EXCL refusal below.
+        #[cfg(target_os = "macos")]
+        {
+            // same name in a different case — "A" -> "A" itself stays a refusal
+            let same_link = lf != lt
+                && lf.to_bytes().eq_ignore_ascii_case(lt.to_bytes())
+                && match (stat_at(fd_from.fd.as_raw_fd(), &lf), stat_at(fd_to.fd.as_raw_fd(), &lt)) {
+                    (Ok(a), Ok(b)) => (a.st_dev, a.st_ino) == (b.st_dev, b.st_ino),
+                    _ => false,
+                };
+            if same_link {
+                // SAFETY: valid fds + NUL-terminated names
+                return cvt(unsafe { libc::renameat(fd_from.fd.as_raw_fd(), lf.as_ptr(), fd_to.fd.as_raw_fd(), lt.as_ptr()) }).map(|_| ());
+            }
+        }
         drop(self.create_new_at(&fd_to, &lt)?);
         hook("move_file:claimed");
         // SAFETY: valid fds + NUL-terminated names
@@ -603,8 +636,17 @@ impl Vault {
                 Ok(c) => c,
                 Err(_) => continue,
             };
-            // SAFETY: valid fd + NUL-terminated names
+            // SAFETY: valid fd + NUL-terminated names.
+            // Linux: renameat2(RENAME_NOREPLACE) — one atomic commit that the
+            // kernel refuses if the name is taken. macOS spells the same thing
+            // renameatx_np(RENAME_EXCL); EEXIST, not overwrite, is the answer on
+            // both, which is what the loop below expects.
+            #[cfg(target_os = "linux")]
             let r = cvt(unsafe { libc::renameat2(dfd, tmp.as_ptr(), dfd, cn.as_ptr(), libc::RENAME_NOREPLACE) });
+            #[cfg(target_os = "macos")]
+            let r = cvt(unsafe { libc::renameatx_np(dfd, tmp.as_ptr(), dfd, cn.as_ptr(), libc::RENAME_EXCL) });
+            #[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+            let r: io::Result<()> = Err(io::Error::from_raw_os_error(libc::ENOSYS));
             let r = match r {
                 Err(e) if matches!(e.raw_os_error(), Some(libc::EINVAL) | Some(libc::ENOSYS) | Some(libc::EOPNOTSUPP)) => {
                     // no NOREPLACE here: link(2) refuses an existing name too
@@ -906,14 +948,40 @@ impl Vault {
     /// cannot redirect it. setuid/setgid/sticky never get through: mode & 0o777.
     pub fn p_chmod(&self, rel: &Path, mode: u32) -> io::Result<()> {
         let (d, leaf) = self.parent(rel, false)?;
-        // SAFETY: valid fd + NUL-terminated name; the fd is owned below
+        // SAFETY: valid fd + NUL-terminated name; the fd is owned below.
+        // Linux opens O_PATH so that a SYMLINK yields an fd to the link itself
+        // (refused by pstat_of below) rather than its target, and so that a FIFO
+        // opens without waiting for a writer. macOS keeps the same guarantees
+        // with different flags: O_SYMLINK opens the link itself (O_NOFOLLOW
+        // would instead fail with ELOOP, which is a different answer), O_NONBLOCK
+        // is what makes a FIFO open at all — a plain O_RDONLY on a FIFO blocks
+        // until a writer appears, which O_PATH never did — and a real fd means
+        // fchmod works directly, no /proc/self/fd lookup (macOS has none).
+        #[cfg(target_os = "linux")]
         let raw = cvt(unsafe { libc::openat(d.fd.as_raw_fd(), leaf.as_ptr(), libc::O_PATH | libc::O_NOFOLLOW | libc::O_CLOEXEC) })?;
+        #[cfg(not(target_os = "linux"))]
+        let raw = cvt(unsafe {
+            libc::openat(
+                d.fd.as_raw_fd(),
+                leaf.as_ptr(),
+                libc::O_RDONLY | libc::O_SYMLINK | libc::O_NONBLOCK | libc::O_CLOEXEC,
+            )
+        })?;
         let fd = unsafe { OwnedFd::from_raw_fd(raw) };
         pstat_of(rel, &fstat(fd.as_raw_fd())?)?; // symlink, FIFO, device, socket -> refused
         hook("p_chmod:opened");
-        let via = CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd())).expect("no NUL in a decimal fd");
-        // SAFETY: NUL-terminated path; the magic link resolves to the inode `fd` pins
-        cvt(unsafe { libc::chmod(via.as_ptr(), (mode & PLUGIN_MODE_MASK) as libc::mode_t) }).map(|_| ())
+        #[cfg(target_os = "linux")]
+        {
+            let via = CString::new(format!("/proc/self/fd/{}", fd.as_raw_fd())).expect("no NUL in a decimal fd");
+            // SAFETY: NUL-terminated path; the magic link resolves to the inode `fd` pins
+            return cvt(unsafe { libc::chmod(via.as_ptr(), (mode & PLUGIN_MODE_MASK) as libc::mode_t) }).map(|_| ());
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            // SAFETY: the fd is open (not O_PATH, which macOS lacks): fchmod
+            // changes the inode we hold, so a swap after the open cannot redirect it
+            cvt(unsafe { libc::fchmod(fd.as_raw_fd(), (mode & PLUGIN_MODE_MASK) as libc::mode_t) }).map(|_| ())
+        }
     }
 }
 

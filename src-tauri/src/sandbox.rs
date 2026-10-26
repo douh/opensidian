@@ -21,12 +21,28 @@
    the vault, with one exception: create_vault makes the new folder and its
    Welcome.md seed before the restart. That is the folder the user asked for.
    boot_pick_must_restart() is that decision as a pure function. */
-use landlock::{
-    path_beneath_rules, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
-    RulesetAttr, RulesetCreatedAttr, RulesetStatus, ABI,
-};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
+
+#[cfg(target_os = "linux")]
+pub use landlock::RulesetStatus;
+#[cfg(target_os = "linux")]
+use landlock::{
+    path_beneath_rules, Access, AccessFs, CompatLevel, Compatible, PathBeneath, PathFd, Ruleset,
+    RulesetAttr, RulesetCreatedAttr,
+};
+
+/// Landlock exists only on Linux (three Linux-only syscalls plus prctl(2)), so
+/// on macOS the one status `enforce()` can ever report is NotEnforced. The
+/// name and variants mirror landlock's own type, which is what main.rs logs
+/// and what the tests below compare against; `landlock` is a Linux-only
+/// dependency (Cargo.toml), so the type has to be spelled here for the rest.
+#[cfg(not(target_os = "linux"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RulesetStatus {
+    NotEnforced,
+}
+
 
 /// vault root the process is confined to (None = not enforced)
 static CONFINED: OnceLock<PathBuf> = OnceLock::new();
@@ -122,7 +138,13 @@ pub const LANDLOCK_ENV: &str = "OPENSIDIAN_LANDLOCK";
 
 /// The one stderr line a launch prints when no ruleset is built (default, or
 /// the off-switch). Phase lloff greps for it verbatim.
+#[cfg(target_os = "linux")]
 pub const OFF_LINE: &str = "landlock: off (default; OPENSIDIAN_LANDLOCK=1 enables)";
+/// Same slot on platforms without Landlock: the switch cannot do anything, so
+/// say that instead of promising an opt-in that does not exist here. The two
+/// strings are distinct on purpose — a macOS launch must not claim a switch.
+#[cfg(not(target_os = "linux"))]
+pub const OFF_LINE: &str = "landlock: off (not available on this platform)";
 
 /// Pure switch resolution, testable without touching process env (see the
 /// `ruleset_plan` note on why tests must not `set_var`). `opt_in` / `no` are
@@ -137,6 +159,11 @@ pub fn landlock_switch(opt_in: Option<&std::ffi::OsStr>, no: Option<&std::ffi::O
 
 /// Should main() build a ruleset? Reads both env vars, spelled once each.
 pub fn landlock_enabled() -> bool {
+    // No Landlock off Linux (see RulesetStatus above): a non-Linux launch must
+    // report "off", not promise an opt-in that ends in NotEnforced anyway.
+    #[cfg(not(target_os = "linux"))]
+    return false;
+    #[cfg(target_os = "linux")]
     landlock_switch(
         std::env::var_os(LANDLOCK_ENV).as_deref(),
         std::env::var_os(NO_LANDLOCK_ENV).as_deref(),
@@ -190,6 +217,7 @@ pub fn ruleset_plan(disabled: bool, home: &Path, vault: &Path) -> Option<Ruleset
     })
 }
 
+#[cfg(target_os = "linux")]
 pub fn enforce(vault: &Path) -> Result<RulesetStatus, Box<dyn std::error::Error>> {
     let off = no_landlock_requested();
     if off {
@@ -254,9 +282,20 @@ pub fn enforce(vault: &Path) -> Result<RulesetStatus, Box<dyn std::error::Error>
     Ok(status.ruleset)
 }
 
+/// No Landlock off Linux, so nothing is ever enforced: the same "best effort,
+/// skip where unsupported" answer the Linux build gives on a kernel without
+/// it. `main()` never calls this here (landlock_enabled() is false), but the
+/// signature stays so callers and tests keep one shape per platform.
+#[cfg(not(target_os = "linux"))]
+pub fn enforce(_vault: &Path) -> Result<RulesetStatus, Box<dyn std::error::Error>> {
+    Ok(RulesetStatus::NotEnforced)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    // only the Landlock-gated tests below touch the filesystem
+    #[cfg(target_os = "linux")]
     use std::fs;
 
     /* R31.12 THE RULESET CONTENT IS THE ONLY TESTABLE PART HERE. This kernel
@@ -340,7 +379,12 @@ mod tests {
     fn landlock_switch_default_is_off() {
         assert!(!landlock_switch(None, None), "no env -> landlock must be OFF");
         assert_eq!(LANDLOCK_ENV, "OPENSIDIAN_LANDLOCK");
+        // the launch line names the opt-in on Linux and the platform's absence
+        // of Landlock elsewhere (see OFF_LINE); both are grepped verbatim
+        #[cfg(target_os = "linux")]
         assert_eq!(OFF_LINE, "landlock: off (default; OPENSIDIAN_LANDLOCK=1 enables)");
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(OFF_LINE, "landlock: off (not available on this platform)");
     }
 
     /// OPENSIDIAN_LANDLOCK=1 opts in; any other value does not.
@@ -438,6 +482,7 @@ mod tests {
        comment records the identical left/right mismatch. This helper is that
        precedent generalised for the two tests in this module; a third caller
        of enforce() must use one of them, not invent a third copy. */
+    #[cfg(target_os = "linux")]
     fn reexec_alone(name: &str) -> bool {
         if std::env::var_os("OPENSIDIAN_LL_ALONE").is_some() {
             return false; // we ARE the child: run the body
@@ -454,6 +499,7 @@ mod tests {
 
     /// restrict_self is per-thread: enforce + probe in a child thread, the
     /// unrestricted parent cleans up. Skips on kernels without Landlock.
+    #[cfg(target_os = "linux")]
     #[test]
     fn confines_reads_to_vault() {
         if reexec_alone("sandbox::tests::confines_reads_to_vault") {
@@ -491,10 +537,12 @@ mod tests {
        per-thread), so it stands where the real spawner process stands:
        outside the domain. Everything lives under $HOME (no rights), NOT /tmp
        (a write root, where nothing would be refused and nothing proved). */
+    #[cfg(target_os = "linux")]
     struct TestSpawner {
         cfg: PathBuf,
         locks: PathBuf,
     }
+    #[cfg(target_os = "linux")]
     impl crate::spawner::Handler for TestSpawner {
         fn open(&self, p: &Path, _sw: Option<&crate::spawn::Switch>) -> Result<u32, String> {
             // the spawner can see what the confined window cannot
@@ -517,6 +565,7 @@ mod tests {
         }
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_confined_window_reaches_the_config_and_other_vaults_only_through_the_spawner() {
         if reexec_alone("sandbox::tests::a_confined_window_reaches_the_config_and_other_vaults_only_through_the_spawner") {
@@ -589,6 +638,7 @@ mod tests {
     /// true when the running kernel knows REFER (ABI v2, Linux 5.19). Asked as
     /// a HardRequirement ruleset that is BUILT AND DROPPED — nothing is
     /// restricted by it, so the caller is as unconfined afterwards as before.
+    #[cfg(target_os = "linux")]
     fn kernel_has_refer() -> bool {
         Ruleset::default()
             .set_compatibility(CompatLevel::HardRequirement)
@@ -609,6 +659,7 @@ mod tests {
     /// the kernel, because on such a kernel the move CANNOT be permitted;
     /// landlock with REFER -> the move must succeed, and an EXDEV here is the
     /// grant having been dropped from enforce().
+    #[cfg(target_os = "linux")]
     #[test]
     fn a_move_into_the_vault_trash_survives_our_own_sandbox() {
         if reexec_alone("sandbox::tests::a_move_into_the_vault_trash_survives_our_own_sandbox") {
@@ -678,6 +729,7 @@ mod tests {
        vault under $HOME, is refused with EACCES. Before the fix, the picked
        vault was bound in the unconfined picker process, where both writes
        succeed. */
+    #[cfg(target_os = "linux")]
     #[test]
     fn appguard_landlock_restarted_process_cannot_write_outside_vault() {
         if reexec_alone("sandbox::tests::appguard_landlock_restarted_process_cannot_write_outside_vault") {

@@ -216,8 +216,9 @@ pub(crate) mod tests {
 
     #[test]
     fn vaultlock_contention_across_processes() {
-        // a real second PROCESS holds the lock: flock(1) from util-linux on the
-        // same file, sleeping while we try.
+        // a real second PROCESS holds the lock: a forked child takes flock(2) on
+        // the same file and sleeps. flock(1) is a Linux-only util; flock(2) is
+        // the primitive the lock itself uses, so fork keeps this test on it.
         let d = tmp("proc");
         let v = d.join("A");
         fs::create_dir_all(&v).unwrap();
@@ -226,21 +227,37 @@ pub(crate) mod tests {
         fs::create_dir_all(&locks).unwrap();
         let lf = lock_file(&locks, &canon);
         let ready = d.join("ready");
-        // sh takes the lock on fd 9 and EXECS sleep: the lock holder is the one
-        // pid we kill (flock(1) as a parent would leave sh+sleep holding it).
-        let mut child = std::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("exec 9>'{}'; flock -x 9; touch '{}'; exec sleep 30", lf.display(), ready.display()))
-            .spawn()
-            .expect("flock(1) present");
+        let cstr = |p: &std::path::Path| std::ffi::CString::new(p.to_string_lossy().as_bytes()).unwrap();
+        let (lf_c, ready_c) = (cstr(&lf), cstr(&ready));
+        // SAFETY: between fork and _exit the child only issues raw syscalls
+        // (open/flock/close/sleep), so it never touches harness-held locks.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            unsafe {
+                let fd = libc::open(lf_c.as_ptr(), libc::O_RDWR | libc::O_CREAT, 0o644);
+                if fd < 0 || libc::flock(fd, libc::LOCK_EX) != 0 {
+                    libc::_exit(3);
+                }
+                let m = libc::open(ready_c.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o644);
+                if m >= 0 {
+                    libc::close(m);
+                }
+                libc::sleep(30); // killed below; never exits on its own
+                libc::_exit(0);
+            }
+        }
         let t0 = std::time::Instant::now();
         while !ready.exists() {
-            assert!(t0.elapsed().as_secs() < 10, "flock child never got the lock");
+            assert!(t0.elapsed().as_secs() < 10, "lock holder never got the lock");
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let r = acquire_in(&locks, &canon);
-        let _ = child.kill();
-        let _ = child.wait();
+        unsafe {
+            libc::kill(pid, libc::SIGKILL);
+            let mut st = 0;
+            libc::waitpid(pid, &mut st, 0);
+        }
         assert!(matches!(r, Err(LockErr::Busy(_))), "a lock held by another process must refuse, got {r:?}");
         acquire_eventually(&locks, &canon).expect("free once that process is gone");
     }

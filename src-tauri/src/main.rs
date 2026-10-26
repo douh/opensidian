@@ -2093,7 +2093,17 @@ fn save_debounce_ms() -> u64 {
 /// and $HOME stay browsable even when they sit under a denied prefix (e.g.
 /// HOME=/root). /, /home, /mnt, /media, /run/media, /tmp remain open.
 fn picker_allows(p: &Path) -> bool {
-    const DENY: [&str; 8] = ["/proc", "/sys", "/dev", "/etc", "/usr", "/boot", "/root", "/var"];
+    // canonical paths only — resolve_vault_arg canonicalizes before this runs.
+    // One list for every platform: the entries a box does not have (/proc on
+    // macOS, /System on Linux) simply never match, and the picker tests then
+    // assert the same rules everywhere.
+    // macOS notes: /etc, /var and /tmp are symlinks into /private, so both
+    // spellings are listed; /private/var is deliberately NOT denied because
+    // /private/var/folders is TMPDIR, where a throwaway vault legitimately lives.
+    const DENY: [&str; 15] = [
+        "/proc", "/sys", "/dev", "/etc", "/private/etc", "/usr", "/boot", "/root", "/var/log",
+        "/System", "/Library", "/Applications", "/cores", "/bin", "/sbin",
+    ];
     if !p.is_absolute() {
         return false;
     }
@@ -2217,19 +2227,26 @@ fn check_external(url: &str) -> Result<(), String> {
     if ext_ok(url, false) { Ok(()) } else { Err(format!("blocked scheme: {url}")) }
 }
 
+/// The system opener, spelled ONCE for both call sites below (open_external
+/// and desk_shell): xdg-open on Linux, `open` on macOS. std::process::Command
+/// only — no shell, no opener plugin. A missing opener is a plain Err, never a
+/// fallback to running the target itself.
+#[cfg(target_os = "linux")]
+const OPENER: &str = "xdg-open";
+#[cfg(not(target_os = "linux"))]
+const OPENER: &str = "open";
+
 #[tauri::command]
 fn open_external(url: String) -> Result<(), String> {
     check_external(&url)?;
-    // std::process::Command only — no shell, no opener plugin. Missing xdg-open
-    // (headless smoke, minimal hosts) is a plain Err, never a fallback.
-    std::process::Command::new("xdg-open")
+    std::process::Command::new(OPENER)
         .arg(&url)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("xdg-open: {e}"))
+        .map_err(|e| format!("{OPENER}: {e}"))
 }
 
 #[tauri::command]
@@ -3321,10 +3338,121 @@ fn vfs_sync(h: &tauri::AppHandle, req: &tauri::http::Request<Vec<u8>>) -> PageRe
         .expect("vfs sync response")
 }
 
+/// the host this build runs on, as Node names it, injected before any page
+/// script. ui/plugins/node-desktop.js used to answer os.platform()/process.platform
+/// with a fixed "linux"/"x64", which sent plugins down Linux-only paths on macOS;
+/// these four strings are the only host facts a plugin legitimately branches on
+/// (still no hostname, no NIC, no kernel, no version).
+fn host_js() -> String {
+    let os = match std::env::consts::OS {
+        "macos" => "darwin",
+        other => other,
+    };
+    let arch = match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    };
+    let typ = match os {
+        "darwin" => "Darwin",
+        "linux" => "Linux",
+        "windows" => "Windows_NT",
+        _ => "Unknown",
+    };
+    format!(
+        "globalThis.__opensidianHost = Object.freeze({{ os: '{os}', type: '{typ}', arch: '{arch}', machine: '{}' }});",
+        std::env::consts::ARCH
+    )
+}
+
+/// macOS draws no in-window menu, so without this the only ways to reach Settings
+/// (and therefore Settings > Community plugins > Browse) are an unlisted shortcut
+/// or the command palette. The stock auto-menu is REPLACED rather than extended
+/// because Tauri only builds the default one; Edit and Window keep their
+/// predefined items, so Cmd+C/V/Z, Cmd+M and Cmd+W still work. Both new items
+/// only eval page functions — no new command, no new reach.
+#[cfg(target_os = "macos")]
+fn install_mac_menu(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
+    let settings = MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrCtrl+,"))?;
+    let plugins = MenuItem::with_id(app, "community-plugin", "Community plugins…", true, None::<&str>)?;
+    let appm = Submenu::with_items(
+        app,
+        "Opensidian",
+        true,
+        &[
+            &PredefinedMenuItem::about(app, None, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &settings,
+            &plugins,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::hide(app, None)?,
+            &PredefinedMenuItem::hide_others(app, None)?,
+            &PredefinedMenuItem::show_all(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::quit(app, None)?,
+        ],
+    )?;
+    let edit = Submenu::with_items(
+        app,
+        "Edit",
+        true,
+        &[
+            &PredefinedMenuItem::undo(app, None)?,
+            &PredefinedMenuItem::redo(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::cut(app, None)?,
+            &PredefinedMenuItem::copy(app, None)?,
+            &PredefinedMenuItem::paste(app, None)?,
+            &PredefinedMenuItem::select_all(app, None)?,
+        ],
+    )?;
+    let window = Submenu::with_items(
+        app,
+        "Window",
+        true,
+        &[
+            &PredefinedMenuItem::minimize(app, None)?,
+            &PredefinedMenuItem::maximize(app, None)?,
+            &PredefinedMenuItem::separator(app)?,
+            &PredefinedMenuItem::close_window(app, None)?,
+        ],
+    )?;
+    app.set_menu(Menu::with_items(app, &[&appm, &edit, &window])?)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod host_js_tests {
+    /// the injected host strings are what a plugin's platform branch reads; a
+    /// wrong name here is exactly the bug that made macOS take Linux paths
+    #[test]
+    fn reports_this_builds_host_in_node_names() {
+        let s = super::host_js();
+        let (os, typ) = if cfg!(target_os = "macos") {
+            ("darwin", "Darwin")
+        } else if cfg!(target_os = "linux") {
+            ("linux", "Linux")
+        } else {
+            (std::env::consts::OS, "Unknown")
+        };
+        assert!(s.contains(&format!("os: '{os}'")), "{s}");
+        assert!(s.contains(&format!("type: '{typ}'")), "{s}");
+        assert!(s.contains("machine: '"), "{s}");
+        assert!(s.contains("Object.freeze"), "{s}");
+    }
+}
+
 /// the app window, from the config entry, with page_csp on its responses
 fn page_window(app: &tauri::AppHandle, wc: &tauri::utils::config::WindowConfig) -> tauri::Result<()> {
     let h = app.clone();
+    #[cfg(target_os = "macos")]
+    eprintln!(
+        "[frame] decorations={} titleBarStyle={:?} (tauri.macos.conf.json; overlay = native traffic lights)",
+        wc.decorations, wc.title_bar_style
+    );
     tauri::WebviewWindowBuilder::from_config(app, wc)?
+        .initialization_script(host_js())
         .on_web_resource_request(move |req, res| {
             if req.uri().path() == VFS_SYNC_PATH {
                 *res = vfs_sync(&h, &req);
@@ -3578,7 +3706,7 @@ fn desk_shell(v: State<Vault>, op: String, target: String) -> Result<(), String>
         _ => return Err(format!("EINVAL: unknown shell op {op}")),
     };
     eprintln!("[desk] shell {op} {}", arg.to_string_lossy());
-    std::process::Command::new("xdg-open")
+    std::process::Command::new(OPENER)
         .arg(&arg)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
@@ -3589,7 +3717,7 @@ fn desk_shell(v: State<Vault>, op: String, target: String) -> Result<(), String>
                 let _ = c.wait();   // reap it, no zombie
             });
         })
-        .map_err(|e| format!("ENOENT: xdg-open: {e}"))
+        .map_err(|e| format!("ENOENT: {OPENER}: {e}"))
 }
 
 /* ---- themefs R5 (themes): the listing predicate is the oracle's, verbatim
@@ -5580,8 +5708,15 @@ extern "C" fn on_term(_: libc::c_int) {
 /// processes we spawn (desk_proc) keep the stock SIGTERM.
 fn install_term(app: tauri::AppHandle) {
     let mut fds = [0 as libc::c_int; 2];
-    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
-        eprintln!("[quit] SIGTERM flush unavailable: pipe2 failed");
+    // pipe2(2) is Linux-only. macOS: pipe(2), then FD_CLOEXEC on both ends —
+    // same guarantee, done immediately on this thread before the reader exists.
+    #[cfg(target_os = "linux")]
+    let made = unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } == 0;
+    #[cfg(not(target_os = "linux"))]
+    let made = unsafe { libc::pipe(fds.as_mut_ptr()) } == 0
+        && fds.iter().all(|fd| unsafe { libc::fcntl(*fd, libc::F_SETFD, libc::FD_CLOEXEC) } == 0);
+    if !made {
+        eprintln!("[quit] SIGTERM flush unavailable: pipe failed");
         return;
     }
     TERM_FD.store(fds[1], std::sync::atomic::Ordering::SeqCst);
@@ -5866,6 +6001,21 @@ fn main() {
         .setup(move |app| {
             if let Some(wc) = &page_conf {
                 page_window(app.handle(), wc)?;
+            }
+            #[cfg(target_os = "macos")]
+            {
+                use tauri::Manager;
+                install_mac_menu(app)?;
+                app.on_menu_event(|app, ev| {
+                    let js = match ev.id().as_ref() {
+                        "settings" => "openSettings()",
+                        "community-plugin" => "openSettings().then(() => showSettingsPage('community'))",
+                        _ => return,
+                    };
+                    if let Some(w) = app.get_webview_window("main") {
+                        let _ = w.eval(js);
+                    }
+                });
             }
             spawn_watcher(app.handle().clone());
             install_term(app.handle().clone()); // tab-dataloss: SIGTERM flushes, bounded
@@ -9802,11 +9952,51 @@ mod tests {
         use std::os::unix::fs::MetadataExt;
         fs::metadata(p).unwrap().dev()
     }
-    fn shm_src(tag: &str) -> PathBuf {
-        let d = PathBuf::from(format!("/dev/shm/opensidian-{tag}-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&d);
-        fs::create_dir_all(&d).unwrap();
-        d
+    /// A scratch dir on a DIFFERENT filesystem from temp_dir — the only honest
+    /// way to prove the cross-fs road, which the tests below FAIL on rather than
+    /// skip when the "second filesystem" is not really a second filesystem.
+    ///
+    /// Linux: /dev/shm is tmpfs on every box this runs on. macOS has no tmpfs and
+    /// no writable mount that is guaranteed to exist, so this mounts a throwaway
+    /// RAM disk (hdiutil + diskutil need no root) and detaches it on drop; where
+    /// even that fails, the caller says so OUT LOUD and skips only the cross-fs
+    /// half, never passing vacuously.
+    struct OtherFs {
+        dir: PathBuf,
+        ram: Option<String>,
+    }
+    impl Drop for OtherFs {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.dir);
+            if let Some(d) = self.ram.take() {
+                let _ = std::process::Command::new("hdiutil").args(["detach", "-force", &d]).output();
+            }
+        }
+    }
+    fn other_fs(tag: &str) -> Option<OtherFs> {
+        #[cfg(target_os = "linux")]
+        {
+            let dir = PathBuf::from(format!("/dev/shm/opensidian-{tag}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).ok()?;
+            Some(OtherFs { dir, ram: None })
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            let out = std::process::Command::new("hdiutil").args(["attach", "-nomount", "ram://8192"]).output().ok()?;
+            if !out.status.success() {
+                return None;
+            }
+            let disk = String::from_utf8_lossy(&out.stdout).split_whitespace().next()?.to_string();
+            let name = format!("OSDRAM-{tag}-{}", std::process::id());
+            let st = std::process::Command::new("diskutil").args(["erasevolume", "HFS+", &name, &disk]).output().ok()?;
+            let dir = PathBuf::from("/Volumes").join(&name);
+            if !st.status.success() || !dir.is_dir() {
+                let _ = std::process::Command::new("hdiutil").args(["detach", "-force", &disk]).output();
+                return None;
+            }
+            Some(OtherFs { dir, ram: Some(disk) })
+        }
     }
     const BODY: &[u8] = b"\x89PNG\r\n\x1a\nosdrop-body-0123456789";
 
@@ -9822,10 +10012,15 @@ mod tests {
         assert_eq!((im.name.as_str(), im.how, &im.src), ("one.png", "link", &vaultfs::SrcFate::Removed));
         assert!(!s.exists());
         assert_eq!(sha(&root.join("one.png")), want);
-        // cross-fs: /dev/shm is tmpfs on every box this runs on
-        let shm = shm_src("osd-roads");
-        assert_ne!(dev_of(&shm), dev_of(&root), "/dev/shm and {} share a device — no second filesystem, cross-fs NOT proven", root.display());
-        let s2 = src_file(&shm, "two.png", BODY);
+        // cross-fs: a REAL second filesystem, or say so and stop here
+        let Some(shm) = other_fs("osd-roads") else {
+            eprintln!("osd-roads: cross-fs half SKIPPED — no second filesystem on this box");
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&srcd);
+            return;
+        };
+        assert_ne!(dev_of(&shm.dir), dev_of(&root), "{} and {} share a device — no second filesystem, cross-fs NOT proven", shm.dir.display(), root.display());
+        let s2 = src_file(&shm.dir, "two.png", BODY);
         let im = vfs.import_move(&s2, Path::new(""), &mut cand_names("two.png"), MAX_IMG_BYTES, b"", false).unwrap();
         assert_eq!((im.name.as_str(), im.how, &im.src), ("two.png", "copy", &vaultfs::SrcFate::Removed));
         assert!(!s2.exists(), "cross-fs: the source must be gone after a committed move");
@@ -9833,13 +10028,12 @@ mod tests {
         assert_eq!(listing(&root), vec!["Note.md", "one.png", "sub", "two.png"], "no temp left behind");
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&srcd);
-        let _ = fs::remove_dir_all(&shm);
     }
 
     /// THE crash-safety criterion: a fault before the final rename, on both roads
     #[test]
     fn osdrop_injected_failure_before_commit_leaves_source_intact_and_no_partial_file() {
-        let shm = shm_src("osd-crash");
+        let shm = other_fs("osd-crash");
         // (road, fault point, source dir is another fs?, force the copy road on one fs?)
         let cases: [(&str, &'static str, bool, bool); 5] = [
             ("same-fs link", "import:staged", false, false),
@@ -9850,7 +10044,18 @@ mod tests {
         ];
         for (road, at, cross, force) in cases {
             let (root, srcd) = drop_vault("osd-crash");
-            let sdir = if cross { shm.clone() } else { srcd.clone() };
+            let sdir = if cross {
+                // no second filesystem: say so for THIS road and keep going
+                let Some(fs2) = shm.as_ref() else {
+                    eprintln!("{road} SKIPPED — no second filesystem on this box");
+                    let _ = fs::remove_dir_all(&root);
+                    let _ = fs::remove_dir_all(&srcd);
+                    continue;
+                };
+                fs2.dir.clone()
+            } else {
+                srcd.clone()
+            };
             assert_eq!(dev_of(&sdir) != dev_of(&root), cross, "{road}: fixture filesystem layout is wrong");
             // a large-enough body that the copy road writes more than one chunk
             let mut big = BODY.to_vec();
@@ -9879,7 +10084,6 @@ mod tests {
             let _ = fs::remove_dir_all(&root);
             let _ = fs::remove_dir_all(&srcd);
         }
-        let _ = fs::remove_dir_all(&shm);
     }
 
     /// after the commit the vault file is complete; a source that cannot be
@@ -9906,11 +10110,16 @@ mod tests {
     #[test]
     fn osdrop_refused_untouched_and_crossfs_collision_renames() {
         let (root, _srcd) = drop_vault("osd-ref");
-        let shm = shm_src("osd-ref");
-        let zip = src_file(&shm, "arch.zip", b"PK\x03\x04 not attachable");
+        let Some(shm) = other_fs("osd-ref") else {
+            eprintln!("osd-ref SKIPPED — no second filesystem on this box");
+            let _ = fs::remove_dir_all(&root);
+            let _ = fs::remove_dir_all(&_srcd);
+            return;
+        };
+        let zip = src_file(&shm.dir, "arch.zip", b"PK\x03\x04 not attachable");
         let zip_sha = sha(&zip);
         fs::write(root.join("dup.png"), b"MINE").unwrap();
-        let png = src_file(&shm, "dup.png", BODY);
+        let png = src_file(&shm.dir, "dup.png", BODY);
         let a = attach_drop(&root, "Note", &[zip.clone(), png.clone()]).unwrap();
         assert_eq!(a.text, "![[dup 1.png]]", "{:?}", a.refused);
         assert_eq!(a.refused.len(), 1);
@@ -9919,7 +10128,6 @@ mod tests {
         assert_eq!(fs::read(root.join("dup.png")).unwrap(), b"MINE", "collision overwrote");
         assert_eq!(fs::read(root.join("dup 1.png")).unwrap(), BODY);
         let _ = fs::remove_dir_all(&root);
-        let _ = fs::remove_dir_all(&shm);
         let _ = fs::remove_dir_all(&_srcd);
     }
 
@@ -9950,19 +10158,22 @@ mod tests {
         }
         assert_eq!(pdf_path_in(&root, "paper.pdf"), Some(root.canonicalize().unwrap().join("paper.pdf")));
         // cross-fs + collision + upper-case extension
-        let shm = shm_src("pdfd-ok");
-        let s2 = src_file(&shm, "paper.pdf", &body);
-        let s3 = src_file(&shm, "SCAN.PDF", &body);
-        let a = attach_drop(&root, "Note", &[s2.clone(), s3.clone()]).unwrap();
-        assert!(a.refused.is_empty(), "{:?}", a.refused);
-        assert_eq!(a.text, "![[paper 1.pdf]]\n![[SCAN.PDF]]");
-        assert!(s2.exists() && s3.exists(), "cross-fs PDF drop removed a source");
-        assert_eq!(sha(&root.join("paper.pdf")), want, "the collision overwrote the first pdf");
-        assert_eq!(sha(&root.join("paper 1.pdf")), want);
-        assert_eq!(sha(&root.join("SCAN.PDF")), want);
-        let mut ix = Index::build(&root);
-        ix.add_image("paper 1.pdf");
-        assert!(ix.images().contains(&"paper 1.pdf".to_string()), "{:?}", ix.images());
+        if let Some(shm) = other_fs("pdfd-ok") {
+            let s2 = src_file(&shm.dir, "paper.pdf", &body);
+            let s3 = src_file(&shm.dir, "SCAN.PDF", &body);
+            let a = attach_drop(&root, "Note", &[s2.clone(), s3.clone()]).unwrap();
+            assert!(a.refused.is_empty(), "{:?}", a.refused);
+            assert_eq!(a.text, "![[paper 1.pdf]]\n![[SCAN.PDF]]");
+            assert!(s2.exists() && s3.exists(), "cross-fs PDF drop removed a source");
+            assert_eq!(sha(&root.join("paper.pdf")), want, "the collision overwrote the first pdf");
+            assert_eq!(sha(&root.join("paper 1.pdf")), want);
+            assert_eq!(sha(&root.join("SCAN.PDF")), want);
+            let mut ix = Index::build(&root);
+            ix.add_image("paper 1.pdf");
+            assert!(ix.images().contains(&"paper 1.pdf".to_string()), "{:?}", ix.images());
+        } else {
+            eprintln!("pdfd-ok: cross-fs half SKIPPED — no second filesystem on this box");
+        }
         // one drop, both kinds: the image is MOVED, the PDF beside it COPIED
         let png = src_file(&srcd, "fig.png", BODY);
         let p4 = src_file(&srcd, "notes.pdf", &body);
@@ -9972,7 +10183,6 @@ mod tests {
         assert!(a.kept.is_empty(), "a PDF copy is not a failed move: {:?}", a.kept);
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&srcd);
-        let _ = fs::remove_dir_all(&shm);
     }
 
     /// pdfdrop: the magic check is on the OPENED source and refuses before a
@@ -9982,11 +10192,17 @@ mod tests {
     #[test]
     fn pdfdrop_refuses_a_pdf_whose_bytes_are_not_pdf() {
         let (root, srcd) = drop_vault("pdfd-magic");
-        let shm = shm_src("pdfd-magic");
+        // the one cross-fs source; same dir with a loud note where there is no
+        // second filesystem (the magic check is identical on both roads)
+        let shm = other_fs("pdfd-magic");
+        if shm.is_none() {
+            eprintln!("pdfd-magic: cross-fs source SKIPPED — no second filesystem on this box");
+        }
+        let far = shm.as_ref().map_or_else(|| srcd.clone(), |f| f.dir.clone());
         let before = listing(&root);
         let srcs = [
             src_file(&srcd, "fake.pdf", b"\x89PNG\r\n\x1a\nnot a pdf"),
-            src_file(&shm, "fake2.pdf", b"MZ\x90\x00 an exe"),
+            src_file(&far, "fake2.pdf", b"MZ\x90\x00 an exe"),
             src_file(&srcd, "short.pdf", b"%PD"),
             src_file(&srcd, "empty.pdf", b""),
             src_file(&srcd, "late.pdf", b" %PDF-1.7 header not at offset 0"),
@@ -10010,7 +10226,6 @@ mod tests {
         assert!(srcs[0].exists());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_dir_all(&srcd);
-        let _ = fs::remove_dir_all(&shm);
     }
 
     /// pdfdrop: the PDF cap is pdf::MAX_PDF_BYTES (256 MiB) — the embed renderer

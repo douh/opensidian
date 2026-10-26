@@ -156,14 +156,35 @@ pub fn await_ready(ready: impl Fn() -> bool, alive: impl Fn() -> bool, timeout: 
     }
 }
 
-/// is `pid` a live (non-zombie) process? Reads /proc/<pid>/stat — a read
-/// root under landlock; signals (kill 0) may be scoped there.
+/// is `pid` a live (non-zombie) process? Linux reads /proc/<pid>/stat — a read
+/// root under landlock; signals (kill 0) may be scoped there. macOS has no
+/// /proc, so libproc answers the same question: `pbsi_status` is the kernel's
+/// process state and SZOMB (5) is a zombie waiting to be reaped.
+#[cfg(target_os = "linux")]
 pub fn alive(pid: u32) -> bool {
     match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         // "pid (comm) S ..." — comm may hold spaces/parens: state follows the LAST ')'
         Ok(s) => s.rfind(')').and_then(|i| s[i + 1..].trim_start().chars().next()).is_some_and(|c| c != 'Z' && c != 'X'),
         Err(_) => false,
     }
+}
+
+#[cfg(target_os = "macos")]
+pub fn alive(pid: u32) -> bool {
+    // SAFETY: out-param written only by the kernel call; the size passed is the
+    // size of the struct it fills, and a short answer reads nothing back.
+    unsafe {
+        let mut info: libc::proc_bsdshortinfo = std::mem::zeroed();
+        let want = std::mem::size_of::<libc::proc_bsdshortinfo>() as libc::c_int;
+        let n = libc::proc_pidinfo(pid as libc::c_int, libc::PROC_PIDT_SHORTBSDINFO, 0, &mut info as *mut _ as *mut libc::c_void, want);
+        n == want && info.pbsi_status != libc::SZOMB
+    }
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
+pub fn alive(pid: u32) -> bool {
+    // SAFETY: signal 0 is the existence probe; it delivers nothing
+    unsafe { libc::kill(pid as libc::c_int, 0) == 0 }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -353,13 +374,16 @@ mod tests {
         assert_eq!(await_ready(|| { k.set(k.get() + 1); k.get() > 1 }, || false, ms(2000), ms(1)), Handoff::Ready);
     }
 
-    /// /proc liveness: we are alive, a reaped child is not, a zombie is not.
+    /// liveness: we are alive, a reaped child is not, a zombie is not.
     #[test]
     fn switch_alive_probe_reads_proc() {
         assert!(alive(std::process::id()));
-        let mut c = std::process::Command::new("/bin/true").spawn().unwrap();
+        // "true" from PATH: macOS has no /bin/true (it lives in /usr/bin)
+        let mut c = std::process::Command::new("true").spawn().unwrap();
         let pid = c.id();
-        while std::fs::read_to_string(format!("/proc/{pid}/stat")).map(|s| !s.contains(") Z")).unwrap_or(false) {
+        // the SAME probe: wait until it stops reporting the child, which is the
+        // zombie it must call dead (per-platform: /proc on Linux, libproc on macOS)
+        while alive(pid) {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(!alive(pid), "zombie counted as alive");

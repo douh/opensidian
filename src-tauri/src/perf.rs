@@ -1090,6 +1090,9 @@ mod tests {
        write on ~/.cache only, which is exactly the shape of the gate's
        /srv/out/<goal>. On a kernel with no landlock the test SKIPS LOUDLY —
        it prints what the kernel lacks, it never passes vacuously. */
+    /// Landlock-only: off Linux there is no ruleset to survive, and the child
+    /// re-exec below would assert nothing (see sandbox.rs for the same gating).
+    #[cfg(target_os = "linux")]
     #[test]
     fn otel_sink_survives_the_sandbox_that_kills_a_path_open() {
         use crate::sandbox;
@@ -1152,10 +1155,13 @@ mod tests {
                     eprintln!("otel sink test SKIPPED: this kernel cannot enforce landlock ({e})");
                     None
                 }
-                Ok(landlock::RulesetStatus::NotEnforced) => {
+                Ok(sandbox::RulesetStatus::NotEnforced) => {
                     eprintln!("otel sink test SKIPPED: landlock reported NotEnforced on this kernel");
                     None
                 }
+                // Landlock off Linux has exactly one status, so `Ok(_)` could
+                // never be reached there — the arm is the enforced case only.
+                #[cfg(target_os = "linux")]
                 Ok(_) => {
                     let by_path = OpenOptions::new().create(true).append(true).open(&sp).is_ok();
                     let mut f = pre;

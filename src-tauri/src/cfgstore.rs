@@ -317,20 +317,50 @@ mod tests {
         fs::write(&cfg, "{}").unwrap();
         fs::create_dir_all(&locks).unwrap();
         let lf = lock_file(&locks, &cfg);
-        // holder: takes the lock on fd 9, writes a key while holding it, then releases
-        let script = format!(
-            "exec 9>>'{lf}'; flock -x 9; echo locked; sleep 0.6; printf '%s' '{{\"other\":1,\"list\":[\"/other\"]}}' > '{cfg}'; exit 0",
-            lf = lf.display(),
-            cfg = cfg.display()
-        );
-        let mut ch = std::process::Command::new("sh").arg("-c").arg(script).stdout(std::process::Stdio::piped()).spawn().unwrap();
-        let mut line = String::new();
-        std::io::BufRead::read_line(&mut std::io::BufReader::new(ch.stdout.take().unwrap()), &mut line).unwrap();
-        assert_eq!(line.trim(), "locked");
+        // holder: a FORKED child takes flock(2) on the lock file, writes a key
+        // while holding it, then exits. flock(1) is a Linux-only tool, and
+        // flock(2) is the very primitive the store uses, so forking keeps the
+        // test on it instead of adding a shell/utility dependency per platform.
+        let cstr = |p: &std::path::Path| std::ffi::CString::new(p.to_string_lossy().as_bytes()).unwrap();
+        let (lf_c, cfg_c, go_c) = (cstr(&lf), cstr(&cfg), cstr(&d.join("locked")));
+        // SAFETY: between fork and _exit the child only issues raw syscalls
+        // (open/flock/write/usleep), so it never touches the allocator or locks
+        // that another thread in the harness might hold.
+        let pid = unsafe { libc::fork() };
+        assert!(pid >= 0, "fork failed");
+        if pid == 0 {
+            unsafe {
+                let fd = libc::open(lf_c.as_ptr(), libc::O_RDWR | libc::O_CREAT, 0o644);
+                if fd < 0 || libc::flock(fd, libc::LOCK_EX) != 0 {
+                    libc::_exit(3);
+                }
+                // say "holding the lock" through a marker file (no pipe handshake)
+                let m = libc::open(go_c.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_TRUNC, 0o644);
+                if m >= 0 {
+                    libc::write(m, b"ok".as_ptr().cast(), 2);
+                    libc::close(m);
+                }
+                libc::usleep(600_000);
+                let body: &[u8] = b"{\"other\":1,\"list\":[\"/other\"]}";
+                let f2 = libc::open(cfg_c.as_ptr(), libc::O_WRONLY | libc::O_TRUNC);
+                if f2 >= 0 {
+                    libc::write(f2, body.as_ptr().cast(), body.len());
+                    libc::close(f2);
+                }
+                libc::_exit(0);
+            }
+        }
+        let t_wait = std::time::Instant::now();
+        while !d.join("locked").exists() {
+            assert!(t_wait.elapsed().as_secs() < 5, "holder never took the lock");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         let t0 = std::time::Instant::now();
         update_in(&locks, &cfg, &[Op::PushRecent("/mine".into())]).unwrap();
         assert!(t0.elapsed().as_millis() >= 300, "update did not wait for the holder ({:?})", t0.elapsed());
-        ch.wait().unwrap();
+        let mut st = 0;
+        unsafe { libc::waitpid(pid, &mut st, 0) };
+        assert_eq!(st, 0, "holder failed");
         let v = read_value_in(&locks, &cfg);
         assert_eq!(v["list"], serde_json::json!(["/mine", "/other"]), "{v}");
         assert_eq!(v["other"], 1, "{v}");

@@ -233,7 +233,12 @@ fn build(sp: &Spec) -> Command {
     for (k, v) in &sp.env {
         c.env(k, v);
     }
-    // SAFETY: async-signal-safe syscalls only, between fork and exec
+    // SAFETY: async-signal-safe syscalls only, between fork and exec.
+    // PR_SET_PDEATHSIG and close_range are Linux-only. macOS has neither: a
+    // child outlives the app (it is reaped by our own pump threads like any
+    // other orphan) and fds above 2 stay as std left them — std sets CLOEXEC on
+    // the pipes it creates, so nothing of ours leaks into the exec'd program.
+    #[cfg(target_os = "linux")]
     unsafe {
         c.pre_exec(|| {
             libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGKILL as libc::c_ulong, 0, 0, 0);
