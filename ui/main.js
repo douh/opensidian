@@ -8931,6 +8931,7 @@ document.addEventListener("keydown", e => {
 
 $("stab-files").onclick = () => setPane("files");
 $("collapsebtn").onclick = cmdToggleSide;
+$("setbtn").onclick = cmdSettings;   // same command the palette runs, so the modal state stays in one place
 $("stab-search").onclick = () => setPane("search");
 $("stab-bm").onclick = () => setPane("bm");
 $("sinput").oninput = () => {              // debounce 60ms (was 150: sized for the disk-walking search; the index answers in ~1ms, the DOM for ~400 hits in a few ms)
