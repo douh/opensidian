@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- App Sandbox: the process may only write inside its container and the
+         folders the user picks in an NSOpenPanel. Vault access is therefore a
+         user gesture plus a security-scoped bookmark, never an arbitrary path. -->
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+    <!-- the plugin store and the signed update check are HTTPS clients -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- the folder a user picks becomes a vault (read-write), and a new vault is
+         created inside a picked folder -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <!-- the grant must survive a relaunch: the picked folder is remembered as an
+         app-scoped security-scoped bookmark in ~/.opensidian.json -->
+    <key>com.apple.security.files.bookmarks.app-scope</key>
+    <true/>
+</dict>
+</plist>

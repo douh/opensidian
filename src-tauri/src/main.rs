@@ -32,6 +32,8 @@ mod plugin_store;
 mod qscreate;
 mod perf;
 mod sandbox;
+#[cfg(target_os = "macos")]
+mod sandbox_mac;
 // cp-secrets: app.secretStorage over the OS keyring (Secret Service)
 mod secrets;
 mod settings;
@@ -1464,6 +1466,125 @@ fn persist_vault(p: &Path) {
     cfg_update(&[cfgstore::Op::PushRecent(p.display().to_string())]);
 }
 
+/* ---------- macOS App Sandbox: folder grants (sandbox_mac.rs) ------------
+   Under com.apple.security.app-sandbox a path is not a permission: the vault
+   folder is reachable only through the NSOpenPanel grant the user gave, kept
+   across launches as an app-scoped security-scoped bookmark in the config.
+   Nothing here runs on Linux or in an unsandboxed binary — sandbox_mac's
+   sandboxed() is false there and every helper below is a no-op. */
+#[cfg(target_os = "macos")]
+const BOOKMARK_KEY: &str = "vault_bookmarks";
+
+/// (grant works, bookmark is stale) for `p` from the stored bookmark
+#[cfg(target_os = "macos")]
+fn resume_vault_access(p: &Path) -> (bool, bool) {
+    if !sandbox_mac::sandboxed() {
+        return (true, false);
+    }
+    let cfg = cfg_value();
+    let Some(b64) = cfg[BOOKMARK_KEY].get(sandbox_mac::key(p)).and_then(|x| x.as_str()) else {
+        return (false, false);
+    };
+    let Some(bytes) = sandbox_mac::b64_decode(b64) else {
+        eprintln!("[sandbox] damaged bookmark for {} — ask again", p.display());
+        return (false, false);
+    };
+    let a = sandbox_mac::start_access(p, &bytes);
+    if a.ok {
+        eprintln!("[sandbox] resumed the folder grant for {}", p.display());
+    }
+    (a.ok, a.stale)
+}
+
+/// store the grant this process holds for `p` (the panel's URL, or the URL a
+/// bookmark resolved to). Without a grant there is nothing to mint — the old
+/// bookmark is left alone, so a folder reached from the recent list keeps its.
+#[cfg(target_os = "macos")]
+fn remember_vault_access(p: &Path) {
+    if !sandbox_mac::sandboxed() {
+        return;
+    }
+    let Some(bytes) = sandbox_mac::bookmark(p) else {
+        return;
+    };
+    let v = serde_json::Value::String(sandbox_mac::b64_encode(&bytes));
+    cfg_update(&[cfgstore::Op::SetIn(BOOKMARK_KEY.into(), sandbox_mac::key(p), v)]);
+    eprintln!("[sandbox] stored the folder grant for {}", p.display());
+}
+
+/// Boot rule (sandbox_mac::needs_panel): a boot vault this launch cannot reach
+/// is taken out of `init` — opening it would only fail — and returned so the
+/// setup hook can ask for it in a folder panel. Linux: always None.
+#[cfg(target_os = "macos")]
+fn boot_sandbox_gate(init: &mut Option<PathBuf>) -> Option<PathBuf> {
+    let p = init.clone()?;
+    let (ok, stale) = resume_vault_access(&p);
+    if !sandbox_mac::needs_panel(sandbox_mac::sandboxed(), ok) {
+        if stale {
+            remember_vault_access(&p); // refresh the moved bookmark
+        }
+        return None;
+    }
+    *init = None;
+    Some(p)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn boot_sandbox_gate(_init: &mut Option<PathBuf>) -> Option<PathBuf> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn boot_sandbox_panel(_app: &tauri::App, _pending: Option<&Path>) {}
+
+/// setup hook: the boot vault had no usable grant, so ask for it now, before
+/// the window (and therefore the UI) exists. A cancelled panel leaves the
+/// picker to ask again; nothing is opened unasked.
+#[cfg(target_os = "macos")]
+fn boot_sandbox_panel(app: &tauri::App, pending: Option<&Path>) {
+    if !sandbox_mac::sandboxed() {
+        return;
+    }
+    let Some(p) = pending else {
+        return;
+    };
+    eprintln!("[sandbox] {} has no folder grant yet — asking in the panel", p.display());
+    let Some(sel) = sandbox_mac::choose_dir(
+        "Opensidian needs your permission for the vault folder. Choose the folder to open it as a vault.",
+        Some(p),
+    ) else {
+        eprintln!("[sandbox] no folder chosen; the picker stays open");
+        if let Ok(mut g) = BOOT_NOTICE.lock() {
+            *g = Some(format!(
+                "{} is outside the app sandbox — choose the folder in the Open panel to grant access",
+                p.display()
+            ));
+        }
+        return;
+    };
+    use tauri::Manager;
+    let st = app.state::<Vault>();
+    match bind_vault_locked(&st, &sel, &vaultlock::env_lock_dir()) {
+        Ok(()) => {
+            remember_vault_access(&sel);
+            persist_vault(&sel);
+            eprintln!("[sandbox] granted and opened {}", sel.display());
+        }
+        Err(BindErr::Lock(e @ vaultlock::LockErr::Busy(_))) => {
+            eprintln!("[sandbox] {e}");
+            if let Ok(mut g) = BOOT_NOTICE.lock() {
+                *g = Some(e.to_string());
+            }
+        }
+        Err(e) => {
+            eprintln!("[sandbox] cannot open {}: {e}", sel.display());
+            if let Ok(mut g) = BOOT_NOTICE.lock() {
+                *g = Some(format!("cannot open {}: {e}", sel.display()));
+            }
+        }
+    }
+}
+
 /* ux-4: left sidebar width persistence (clamped 150-600, default 200 total
    = 44 ribbon + 156 #side stays when the key is absent) */
 #[tauri::command]
@@ -1601,7 +1722,62 @@ fn write_workspace(
 
 #[tauri::command]
 fn recent_vaults() -> Vec<String> {
-    span_timed!("recent_vaults", read_cfg().1.into_iter().filter(|p| Path::new(p).is_dir()).collect())
+    span_timed!("recent_vaults", {
+        let list = read_cfg().1;
+        // macOS App Sandbox: a recent row is offered only while its bookmark
+        // still grants access; resuming HERE is also what makes the row
+        // clickable in this process (the click passes the path to pick_vault)
+        #[cfg(target_os = "macos")]
+        let list = if sandbox_mac::sandboxed() {
+            list.into_iter()
+                .filter(|p| {
+                    let path = PathBuf::from(p);
+                    let _ = resume_vault_access(&path);
+                    path.is_dir()
+                })
+                .collect()
+        } else {
+            list
+        };
+        list.into_iter().filter(|p| Path::new(p).is_dir()).collect()
+    })
+}
+
+/* macOS App Sandbox: the folder panel is the ONLY way into a folder the app has
+   not been granted. `choose_dir` opens it and answers the path the user chose
+   (None = cancelled); the URL stays registered in sandbox_mac, so the caller's
+   next pick_vault/open_vault_window can mint and persist the bookmark.
+   Linux never calls it — the UI's own directory browser is still the picker
+   there, and the command answers None if something does call it. */
+#[tauri::command]
+fn choose_dir(app: tauri::AppHandle, message: Option<String>) -> Option<String> {
+    #[cfg(target_os = "macos")]
+    {
+        let msg = message.unwrap_or_else(|| "Choose a folder".into());
+        let picked = if sandbox_mac::is_main_thread() {
+            sandbox_mac::choose_dir(&msg, None)
+        } else {
+            // a modal panel cannot run off the main thread: post it there and
+            // wait. The wait is bounded so a wedged panel cannot wedge a cmd.
+            let (tx, rx) = std::sync::mpsc::channel();
+            let m2 = msg.clone();
+            if app
+                .run_on_main_thread(move || {
+                    let _ = tx.send(sandbox_mac::choose_dir(&m2, None));
+                })
+                .is_err()
+            {
+                return None;
+            }
+            rx.recv_timeout(std::time::Duration::from_secs(600)).ok().flatten()
+        };
+        return picked.map(|p| p.display().to_string());
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (app, message);
+        None
+    }
 }
 
 /// the BOOT picker's one bind (vaultbleed: Err once this process has a vault —
@@ -1626,6 +1802,9 @@ fn pick_vault_inner(app: &tauri::AppHandle, win: &tauri::Window, v: &State<Vault
         return Err(format!("sandboxed to {} — vault saved, restart Opensidian to open it", sandbox::confined_to().unwrap().display()));
     }
     bind_vault(v, &p)?; // Err once bound: a live process is never re-rooted
+    // macOS App Sandbox: keep the grant (the panel's URL lives in this process)
+    #[cfg(target_os = "macos")]
+    remember_vault_access(&p);
     persist_vault(&p);
     Ok(p.display().to_string())
 }
@@ -1687,6 +1866,8 @@ fn create_vault(app: tauri::AppHandle, win: tauri::Window, v: State<Vault>, pare
             return restart_into(&app, &win, &p);
         }
         bind_vault(&v, &p)?;
+        #[cfg(target_os = "macos")]
+        remember_vault_access(&p);
         persist_vault(&p);
         Ok(p.display().to_string())
     })
@@ -1723,6 +1904,11 @@ async fn open_vault_window(app: tauri::AppHandle, win: tauri::Window, v: State<'
         }
     }
     let sw = if replace { Some(switch_of(&win)?) } else { None };
+    // macOS App Sandbox: the child process can only open `p` if the grant is
+    // already in the config when it boots (its own bookmark resolution runs
+    // before it touches the folder), so write it BEFORE the spawn
+    #[cfg(target_os = "macos")]
+    remember_vault_access(&p);
     let (p2, sw2) = (p.clone(), sw.clone());
     // vsfix: the span times the SPAWN (lock probe + fork/exec, in-process or
     // through the spawner) — the part this window owns. A switch's wait for the
@@ -3359,8 +3545,14 @@ fn host_js() -> String {
         "windows" => "Windows_NT",
         _ => "Unknown",
     };
+    // macOS App Sandbox: the UI must use the folder panel instead of its own
+    // directory browser, which can only see the app container here
+    #[cfg(target_os = "macos")]
+    let sandbox = sandbox_mac::sandboxed();
+    #[cfg(not(target_os = "macos"))]
+    let sandbox = false;
     format!(
-        "globalThis.__opensidianHost = Object.freeze({{ os: '{os}', type: '{typ}', arch: '{arch}', machine: '{}' }});",
+        "globalThis.__opensidianHost = Object.freeze({{ os: '{os}', type: '{typ}', arch: '{arch}', machine: '{}', sandbox: {sandbox} }});",
         std::env::consts::ARCH
     )
 }
@@ -3440,6 +3632,8 @@ mod host_js_tests {
         assert!(s.contains(&format!("type: '{typ}'")), "{s}");
         assert!(s.contains("machine: '"), "{s}");
         assert!(s.contains("Object.freeze"), "{s}");
+        // the test binary runs unsandboxed, so the UI must keep its own browser
+        assert!(s.contains("sandbox: false"), "{s}");
     }
 }
 
@@ -5909,9 +6103,19 @@ fn main() {
         eprintln!("opensidian: {e} — ignored, the window opens normally");
     }
     let arg_vault = argv_vault(&args, env_vault.is_some());
-    let init = env_vault
-        .or(arg_vault)
-        .or_else(|| read_cfg().0.map(PathBuf::from).filter(|p| p.is_dir()));
+    // macOS App Sandbox: a last vault outside the container fails is_dir until
+    // its bookmark is resumed, so it must reach boot_sandbox_gate unchanged
+    // (the panel, not the filter, decides). Linux keeps the R1.6 "still a dir".
+    #[cfg(target_os = "macos")]
+    let last_vault = read_cfg().0.map(PathBuf::from);
+    #[cfg(not(target_os = "macos"))]
+    let last_vault = read_cfg().0.map(PathBuf::from).filter(|p| p.is_dir());
+    let mut init = env_vault.or(arg_vault).or(last_vault);
+    #[cfg(target_os = "macos")]
+    sandbox_mac::boot_probe();
+    // macOS App Sandbox: no grant for the boot vault -> ask for the folder in
+    // setup, before the window exists (see boot_sandbox_panel)
+    let pending_vault = boot_sandbox_gate(&mut init);
     // R18.1: open the telemetry sink BEFORE the sandbox closes. Landlock filters
     // path lookups, not open descriptors, and OPENSIDIAN_OTEL routinely names a
     // file outside the write roots (the gate's $OUT). Opening it after enforce()
@@ -5999,6 +6203,10 @@ fn main() {
         .manage(vault)
         .manage(ZoomLevel(Mutex::new(read_zoom_cfg())))
         .setup(move |app| {
+            // macOS App Sandbox: the boot vault had no usable folder grant, so
+            // the panel runs HERE — before the window, before the UI — and a
+            // folder it returns is bound exactly like a pick_vault would bind
+            boot_sandbox_panel(app, pending_vault.as_deref());
             if let Some(wc) = &page_conf {
                 page_window(app.handle(), wc)?;
             }
@@ -6173,7 +6381,7 @@ fn main() {
             .map(std::borrow::Cow::Owned)
         })
         .invoke_handler(tauri::generate_handler![
-            list_notes, list_images, canvas_io, read_note, write_note, create_note, render, render_blocks, block_lines, render_view, highlight_blocks, graph, graph_local, graph_view, vault_get, pick_vault,
+            list_notes, list_images, canvas_io, read_note, write_note, create_note, render, render_blocks, block_lines, render_view, highlight_blocks, graph, graph_local, graph_view, vault_get, pick_vault, choose_dir,
             create_vault, create_vault_dir, open_vault_window, switch_show, switch_ready, boot_notice, home_dir, list_dirs, list_folders, create_dir, backlinks, search,
             list_bookmarks, toggle_bookmark, bookmark_rows, bm_group_new, bm_group_rename, bm_group_delete, bm_move, bm_add, bm_drag, recent_vaults, rename_note, move_note, update_links, delete_note, link_consent, set_link_consent, strict_line_breaks, set_strict_line_breaks, qs_new_name, readable_line_length, graph_settings, set_graph_settings, tags, tag_counts,
             get_sidebar_w, set_sidebar_w, log_spans, graph_renderer_pref, type_probe, nob_probe, psg_probe, vb_probe, smoke_css,

@@ -22,6 +22,22 @@ Linux — never emulated, never replaced by a new crate:
 - The freedesktop Secret Service (`secrets.rs`): every op is an `unsupported:`
   error. macOS Keychain is not wired up.
 
+The macOS bundle runs inside the **App Sandbox**
+(`packaging/macos/Opensidian.entitlements`, applied by `make-app.sh`), so a path
+is not a permission:
+- folders outside `~/Library/Containers/dev.koto.opensidian` are reached only
+  through `src/sandbox_mac.rs`: an NSOpenPanel on the main thread, and the grant
+  kept across launches as an app-scoped security-scoped bookmark in
+  `~/.opensidian.json` under `vault_bookmarks` (the container's home).
+- never add an `absolute-path.read-write` temporary exception to make a path
+  "just work": it would hand the whole filesystem back and make this decorative.
+- the boot gate is `boot_sandbox_gate` + `boot_sandbox_panel` in `main.rs`: a
+  vault whose bookmark does not resume is asked for in the panel before the
+  window exists. Linux, and any unsandboxed run (`cargo test`, the bare binary),
+  answer `needs_panel(false, …)` and are untouched.
+- the `[sandbox]` boot lines (container path, inside write ok, outside write
+  denied) are the check; a silent `ALLOWED` means confinement is broken.
+
 Two macOS-only wiring points, both keyed off the same truth:
 - `src-tauri/tauri.macos.conf.json`: `decorations: true` + `titleBarStyle:
   Overlay`, so the frame is the system's (real traffic lights) and the page runs
@@ -53,7 +69,8 @@ cannot; `flock(1)` is not used at all — contention tests fork and take
     one vault per process. "Open another vault" starts a new process; a flock
     per vault stops a second backend; `~/.opensidian.json` is shared by all
     processes, so writes go through cfgstore.
-  - `src/sandbox.rs`: optional Landlock self-sandbox (`OPENSIDIAN_LANDLOCK=1`).
+  - `src/sandbox.rs`: optional Landlock self-sandbox (`OPENSIDIAN_LANDLOCK=1`);
+    `src/sandbox_mac.rs` (macOS-only): App Sandbox folder panel and bookmarks.
   - `src/themefs.rs`, `src/builtins.rs`: themes and CSS snippets are files in
     the vault. The bundled community themes in `themes/` are vendored
     **byte-exact** and pinned by sha256 in builtins.rs. Never edit them.

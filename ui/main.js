@@ -72,6 +72,10 @@ function noteErr(m) {
 window.addEventListener("error", e => noteErr(e.message));
 window.addEventListener("unhandledrejection", e => noteErr(e.reason && e.reason.message || e.reason));
 let vaultPath = null, pmode = null, bpath = null;
+// macOS App Sandbox (main.rs host_js): folders outside the app container are
+// reachable only through the native folder panel; the in-app directory browser
+// below can see just the container, so it is not offered there.
+const SANDBOXED = !!(globalThis.__opensidianHost && globalThis.__opensidianHost.sandbox);
 let bootNote = null;   // vaultarg: the rejected-argument reason, taken once from boot_notice
 /* vaultarg census: [vault:<open vault|->] always; [vargerr:<reason>] while that
    reason is ON SCREEN (picker error line, or the notice banner it was said into).
@@ -10483,7 +10487,18 @@ async function enterMode(m) {
   $("p-gonew").hidden = !vaultPath;          // vaultbleed: open/create in a NEW window, keep this one
   $("p-gonew").textContent = m === "create" ? "Create in new window" : "Open in new window";
   $("p-err").textContent = "";
-  await browseTo(await inv("home_dir"));
+  if (SANDBOXED) {
+    // the panel IS the browser here, and the grant it hands the process is what
+    // makes the folder readable at all; cancel returns to the start screen
+    const msg = m === "create" ? "Choose where the new vault folder will be created" : "Choose a folder to open as a vault";
+    const sel = await inv("choose_dir", { message: msg });
+    if (!sel) { showPicker(); return; }
+    bpath = sel;
+    $("p-path").value = sel;
+    $("p-dirs").innerHTML = "";
+  } else {
+    await browseTo(await inv("home_dir"));
+  }
   (m === "create" ? $("p-name") : $("p-path")).focus();
   if (vaultPath) { try { updateTitle(); } catch (_) {} }   // item 14: publish [pbtn:] for the sub-mode buttons (never at the boot picker)
 }
@@ -10494,6 +10509,12 @@ $("p-recent").addEventListener("scroll", () => { if (vaultPath) { try { updateTi
 $("p-close").onclick = () => { $("picker").hidden = true; try { updateTitle(); } catch (_) {} };   // bug-ui #14: the census (window title) drops [precent:] with the picker, as the Esc path does
 $("p-path").onkeydown = e => { if (e.key === "Enter") browseTo($("p-path").value.trim()); };
 $("p-name").onkeydown = e => { if (e.key === "Enter") $("p-go").click(); };
+if (SANDBOXED) {
+  // a typed path is not a grant under App Sandbox: the field shows what the
+  // panel returned and clicking it asks again
+  $("p-path").readOnly = true;
+  $("p-path").onclick = () => { if (pmode) enterMode(pmode); };
+}
 /* vaultbleed A — ONE VAULT PER PROCESS. The boot picker (no vault yet) binds
    the picked vault ONCE and enters it. Once a vault is open this window never
    changes vault: every other vault opens in a NEW PROCESS (open_vault_window).

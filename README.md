@@ -105,12 +105,29 @@ instead of the hardcoded `linux`. Installation image, if you want one:
 hdiutil create -volname Opensidian -srcfolder Opensidian.app -ov -format UDZO Opensidian.dmg
 ```
 
+The bundle runs inside the **App Sandbox**
+(`packaging/macos/Opensidian.entitlements`, applied by `make-app.sh`). Writes
+stay in `~/Library/Containers/dev.koto.opensidian`, and a vault folder is
+reached through the native folder panel: that grant is kept as a security-scoped
+bookmark in the container's `.opensidian.json`, so the next launch opens the
+same vault without asking. Consequences worth knowing:
+
+- a path on the command line (`opensidian ~/Notes`) is not a grant; the first
+  launch takes it to the folder panel, and the folder you pick is remembered;
+- preferences moved into the container, so an older `~/.opensidian.json` is not
+  carried over — pick the vault once and it is remembered from then on;
+- "open another vault" still works: one vault per process, and the grant is
+  written to the config before the new process boots, which resolves it.
+
+The boot log states it: `[sandbox] app-sandbox=on …`, a write inside the
+container that lands, and a write to the real home that is refused. If the
+second ever says `ALLOWED`, the confinement is gone.
+
 Two things stay Linux-only for now, both plumbing rather than features:
 
 - **Landlock sandbox** (`OPENSIDIAN_LANDLOCK=1`). A Linux LSM with no macOS
   equivalent, so a macOS launch reports `landlock: off (not available on this
-  platform)` and runs unsandboxed — the same posture as a Linux launch without
-  the switch.
+  platform)` — on macOS the App Sandbox above is the confinement.
 - **Secret storage.** The freedesktop Secret Service (gnome-keyring, KWallet,
   KeePassXC). Plugins that store API keys report it as unsupported; the macOS
   Keychain is not wired up yet.

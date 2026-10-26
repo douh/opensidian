@@ -95,9 +95,13 @@ cat > "$out/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature: without any signature Apple Silicon refuses to launch the
-# bundle at all, and the ad-hoc one is what every local build of a mac app gets.
+# Ad-hoc signature WITH the App Sandbox entitlements: without any signature
+# Apple Silicon refuses to launch the bundle at all, and the entitlements
+# (packaging/macos/Opensidian.entitlements) are what put the process in the
+# sandbox: writes stay in ~/Library/Containers/dev.koto.opensidian and a vault
+# folder is reachable only through the folder panel's grant (sandbox_mac.rs).
 # It is NOT a distribution signature — see the header.
-codesign --force --sign - "$out" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed; launch may be refused on arm64" >&2
+ent="$root/packaging/macos/Opensidian.entitlements"
+codesign --force --sign - --entitlements "$ent" "$out" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed; launch may be refused on arm64" >&2
 
 echo "==> $out ($version)"
