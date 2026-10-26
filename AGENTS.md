@@ -13,7 +13,10 @@ Licence: GPL-3.0-or-later for all of it, since the first commit.
 README.md` must be empty — so an upstream README edit is never a merge conflict.
 Fork-only prose (macOS build and signing, App Sandbox, interface language, the
 read-only MCP server) belongs in `README-Mac.md` (Simplified Chinese), never in
-`README.md`.
+`README.md`. Work that is planned but not started lives in a local
+`PLAN-<topic>.md` at the repo root and is NEVER committed — keep it out of `git
+status` with `.git/info/exclude` (a per-clone list, so no `PLAN` line ends up in
+`.gitignore` or in a merge).
 
 ## Platforms
 One tree, two targets. Three pieces are Linux plumbing and are STUBBED off
