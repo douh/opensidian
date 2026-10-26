@@ -141,15 +141,16 @@ proxied network therefore reaches GitHub the same way the browser does.
 
 ## 豆包工作 integration (read-only MCP)
 
-豆包工作 (Doubao Work) takes external data as custom plugins over MCP, and its
-local transport is STDIO. The bundle ships `Contents/MacOS/opensidian-mcp`, a
-small read-only MCP server over one vault:
+豆包工作 (Doubao Work) takes external data as custom connectors over MCP, and
+its local transport is STDIO. The bundle ships `Contents/MacOS/opensidian-mcp`,
+a small read-only MCP server over one vault:
 
-1. 插件 → **+ 添加** → 新建自定义插件, 服务器名称 `Opensidian`, 传输类型 **STDIO**.
+1. 连接器 → **新建连接器** (older builds label this 插件 → **+ 添加** →
+   新建自定义插件), 名称 `Opensidian`, 传输类型 **STDIO**.
 2. 运行命令: `/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp`.
 3. 参数: the absolute vault path, e.g. `/Users/you/Notes` (or leave the argument
    out and set `OPENSIDIAN_VAULT` in the environment instead).
-4. 保存, then call it from a task (`/` or `@` to pick the plugin).
+4. 保存, then call it from a task (`/` or `@` to pick the connector).
 
 Tools: `list_notes` (relative paths, optional `folder`/`limit`), `read_note`
 (UTF-8 text, truncated at 200 KB by default and marked as such), and
