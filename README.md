@@ -71,6 +71,57 @@ Tested 2026-10-03 on fresh Ubuntu 26.04 LTS and Fedora 44 with Rust 1.98.0
    cargo build --release --locked   # -> target/release/opensidian
    ```
 
+### macOS
+
+Tested 2026-10-25 on macOS 27.0.1 (arm64) with Rust 1.99.1. The system deps
+above are Linux-only: macOS needs the Xcode command line tools for the linker
+(`xcode-select --install`) and WebKit is part of the OS, so nothing else.
+
+```sh
+cd opensidian/src-tauri
+cargo build --release --locked      # -> target/release/opensidian
+./target/release/opensidian ~/Notes # a vault path; the window opens
+cargo test --locked                 # the Landlock tests skip themselves here
+```
+
+To get something Finder can launch:
+
+```sh
+packaging/macos/make-app.sh         # -> src-tauri/target/macos/Opensidian.app
+```
+
+The bundle is ad-hoc signed, which is what every local Mac build is: it runs on
+the machine that built it, and a copy that travels still needs a Developer ID
+and notarisation to pass Gatekeeper elsewhere.
+
+macOS gets the native frame: `src-tauri/tauri.macos.conf.json` turns decorations
+back on with the overlay title bar, so close/minimise/zoom are real traffic
+lights and the page runs under them (`ui/style.css` hides the Linux self-drawn
+window strip and resize grips). Plugins also see the host they actually run on:
+`os.platform()` and `process.platform` answer `darwin`, arch `arm64`/`x64`,
+instead of the hardcoded `linux`. Installation image, if you want one:
+
+```sh
+hdiutil create -volname Opensidian -srcfolder Opensidian.app -ov -format UDZO Opensidian.dmg
+```
+
+Two things stay Linux-only for now, both plumbing rather than features:
+
+- **Landlock sandbox** (`OPENSIDIAN_LANDLOCK=1`). A Linux LSM with no macOS
+  equivalent, so a macOS launch reports `landlock: off (not available on this
+  platform)` and runs unsandboxed — the same posture as a Linux launch without
+  the switch.
+- **Secret storage.** The freedesktop Secret Service (gnome-keyring, KWallet,
+  KeePassXC). Plugins that store API keys report it as unsupported; the macOS
+  Keychain is not wired up yet.
+
+**Plugin browser downloads** work on macOS through the system `/usr/bin/curl`
+(one request per redirect hop, so the allowlist and byte caps still run on every
+hop). curl does not read the macOS network settings by itself, so when neither a
+`*_proxy` environment nor the app was launched by hand sets one, the system proxy
+is read from `scutil --proxy` and passed as `--proxy` — a launch from Finder on a
+proxied network therefore reaches GitHub the same way the browser does.
+
 ## Licence
 GPL-3.0-or-later ([LICENSE](LICENSE)). Read [THIRD-PARTY.md](THIRD-PARTY.md) before redistributing.
 

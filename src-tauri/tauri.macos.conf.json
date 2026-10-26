@@ -1,0 +1,16 @@
+{
+  "app": {
+    "windows": [
+      {
+        "title": "Opensidian",
+        "width": 1100,
+        "height": 700,
+        "minWidth": 300,
+        "minHeight": 200,
+        "decorations": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true
+      }
+    ]
+  }
+}
