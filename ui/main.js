@@ -4651,6 +4651,11 @@ function applyMode(g, keep) {  // exactly ONE of lp / preview fills the pane
   g.editor.style.display = "none";          // R12: the model textarea never shows; source = lp + reveal
   g.lp.style.display = isLp(m) ? "" : "none";
   if (m !== "reading") g.lp.classList.toggle("src", m === "source");   // opt10b: reading keeps the lp sub-mode class — flipping .lp.src restyled + relaid the kept 30k lp both ways
+  // The table/`$$` block field keys off that class: an empty transaction makes it
+  // and the decoration plugin rebuild, so source mode gets its rows back at once
+  // (and live preview re-draws the blocks) without waiting for the next edit.
+  { const cm = typeof Ed !== "undefined" && Ed.cm ? Ed.cm(g) : null;
+    if (cm && g.view && g.view._lpFx) cm.dispatch({ effects: g.view._lpFx.of(null) }); }
   g.preview.style.display = m === "reading" ? "" : "none";
   // modeswitch opt6: the view the edit <-> reading switch LEAVES (setMode passes
   // it as `keep`) stays laid out instead of display:none — hidden, out of flow,

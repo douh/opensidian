@@ -2167,7 +2167,7 @@ Ed.lpExt = function (v, G) {
   const wantMath = () => {                   // one load per session; bust redraws when it lands
     if (asked || readyMath() || !window.__osVendor) return;
     asked = true;
-    window.__osVendor.loadMathJax().then(() => v.dispatch({ effects: bust.of(null) })).catch(e => console.error("[math]", e));
+    window.__osVendor.loadMathJax().then(() => { const cm = cmView(); if (cm) cm.dispatch({ effects: bust.of(null) }); }).catch(e => console.error("[math]", e));
   };
   const mcache = new Map();                  // tex -> CHTML node; clone per widget (build runs per caret move)
   const texNode = (tex, disp) => {
@@ -2181,14 +2181,17 @@ Ed.lpExt = function (v, G) {
       return n.cloneNode(true);
     } catch (e) { console.error("[math]", e); return null; }
   };
+  const cmView = () => v.cm || (G() && G().lp && G().lp._cm) || null;
   const caretTo = (line, col) => {           // click a widget -> caret at its source (reveals it)
-    const doc = v.state.doc, n = Math.max(1, Math.min(line, doc.lines));
-    v.dispatch({ selection: { anchor: Math.min(doc.line(n).from + col, doc.line(n).to) }, scrollIntoView: true });
-    v.focus();
+    const cm = cmView();
+    if (!cm) return;
+    const doc = cm.state.doc, n = Math.max(1, Math.min(line, doc.lines));
+    cm.dispatch({ selection: { anchor: Math.min(doc.line(n).from + col, doc.line(n).to) }, scrollIntoView: true });
+    cm.focus();
   };
   class MathW extends WidgetType {
-    constructor(tex, line, col) { super(); this.tex = tex; this.line = line; this.col = col; }
-    eq(o) { return o.tex === this.tex && o.col === this.col; }
+    constructor(tex, line, col) { super(); this.tex = tex; this.line = line; this.col = col; this.ready = readyMath(); }
+    eq(o) { return o.tex === this.tex && o.col === this.col && o.ready === this.ready; }
     ignoreEvent() { return true; }
     toDOM() {
       const s = document.createElement("span");
@@ -2200,8 +2203,8 @@ Ed.lpExt = function (v, G) {
     }
   }
   class BlockW extends WidgetType {
-    constructor(k, t, n) { super(); this.k = k; this.t = t; this.n = n; }
-    eq(o) { return o.k === this.k && o.t === this.t; }
+    constructor(k, t, n) { super(); this.k = k; this.t = t; this.n = n; this.ready = k === "math" ? readyMath() : true; }
+    eq(o) { return o.k === this.k && o.t === this.t && o.ready === this.ready; }
     get estimatedHeight() { return this.k === "math" ? 56 : Math.min(600, this.t.split("\n").length * 26 + 8); }
     ignoreEvent() { return true; }
     toDOM() {
@@ -2233,26 +2236,51 @@ Ed.lpExt = function (v, G) {
       return box;
     }
   }
-  const blocksFor = (doc, lo, hi, sel) => {   // start line -> {k,n,e,t}; skips runs the caret is in
-    const m = new Map(), to = Math.min(doc.lines, hi + 1);
-    for (let n = Math.max(1, lo - 200); n <= to; n++) {
-      const e = tableAt(doc, n, to) || mathAt(doc, n, to);
+  const rawNow = () => { const g = G(); return !!(g && g.lp && g.lp.classList.contains("src")); };
+  const scanBlocks = doc => {                 // every table / `$$…$$` run, once per doc
+    const list = [], index = new Map();
+    for (let n = 1; n <= doc.lines; n++) {
+      const e = tableAt(doc, n, doc.lines) || mathAt(doc, n, doc.lines);
       if (!e) continue;
-      const k = tableAt(doc, n, to) ? "tbl" : "math";
-      const bf = doc.line(n).from, bt = doc.line(e).to;
-      m.set(n, { k, n, e, t: doc.sliceString(bf, bt), live: sel.from <= bt && sel.to >= bf });
+      const b = { k: tableAt(doc, n, doc.lines) ? "tbl" : "math", n, e,
+                  t: doc.sliceString(doc.line(n).from, doc.line(e).to) };
+      list.push(b);
+      for (let x = n; x <= e; x++) index.set(x, b);
       n = e;
     }
-    return m;
+    return { list, index };
   };
+  const blockSet = (doc, all, sel) => {
+    if (rawNow()) return Decoration.none;
+    const out = [];
+    for (const b of all) {
+      const bf = doc.line(b.n).from, bt = doc.line(b.e).to;
+      if (sel.from <= bt && sel.to >= bf) continue;     // touched: the source stays
+      out.push(Decoration.replace({ widget: new BlockW(b.k, b.t, b.n), block: true }).range(bf, bt));
+    }
+    return Decoration.set(out, true);
+  };
+  /* Block decorations may NOT come from a ViewPlugin: CM6 throws
+     "Block decorations may not be specified via plugins" and aborts the update,
+     which is the page-sized blank that appeared behind the first table. They
+     belong in a StateField (Ed.hlExt does the same for its marks); detection is
+     cached per doc, so a caret move only refilters the list. */
+  const lpBlocks = CMs.StateField.define({
+    create(st) { const s = scanBlocks(st.doc); return { doc: st.doc, list: s.list, index: s.index, set: blockSet(st.doc, s.list, st.selection.main) }; },
+    update(val, tr) {
+      const s = tr.docChanged ? scanBlocks(tr.state.doc) : { list: val.list, index: val.index };
+      return { doc: tr.state.doc, list: s.list, index: s.index, set: blockSet(tr.state.doc, s.list, tr.state.selection.main) };
+    },
+    provide: f => CMv.EditorView.decorations.from(f, v => v.set),
+  });
 
   const build = view => {
     const g = G(), st = view.state, doc = st.doc, sel = st.selection.main, out = [], labels = [];
     const cur = doc.lineAt(sel.head).number;
-    const vr = view.visibleRanges;
-    const blocks = vr.length
-      ? blocksFor(doc, doc.lineAt(vr[0].from).number, doc.lineAt(vr[vr.length - 1].to).number, sel)
-      : new Map();
+    // source mode (.lp.src) is "live preview with every marker revealed", so the
+    // block widgets must not run there — a raw source pane shows raw source.
+    const raw = rawNow();
+    const blocks = raw ? new Map() : ((view.state.field(lpBlocks, false) || {}).index || new Map());
     let last = -1;
     for (const { from, to } of view.visibleRanges) {
       let pos = from;
@@ -2262,13 +2290,16 @@ Ed.lpExt = function (v, G) {
         if (ln.number <= last) continue;
         last = ln.number;
         const B = blocks.get(ln.number);
-        if (B && !B.live) {                       // draw the block, skip its source lines
-          out.push(Decoration.replace({ widget: new BlockW(B.k, B.t, B.n), block: true }).range(doc.line(B.n).from, doc.line(B.e).to));
-          last = B.e;
-          continue;
+        if (B) {
+          const bf = doc.line(B.n).from, bt = doc.line(B.e).to;
+          if (!(sel.from <= bt && sel.to >= bf)) {   // drawn by lpBlocks: skip the source lines
+            if (B.k === "math") wantMath();
+            last = B.e;
+            continue;
+          }
         }
         const P = Ed.lpParse(g, ln.text);
-        const mr = B || !ln.text.includes("$") ? [] : inlineMath(ln.text);
+        const mr = raw || B || !ln.text.includes("$") ? [] : inlineMath(ln.text);
         let rv = null;
         if (sel.from <= ln.to && sel.to >= ln.from) {
           const lo = Math.max(sel.from, ln.from) - ln.from, hi = Math.min(sel.to, ln.to) - ln.from;
@@ -2322,7 +2353,7 @@ Ed.lpExt = function (v, G) {
       return e.defaultPrevented;
     },
   });
-  return [plugin, clicks];
+  return [plugin, lpBlocks, clicks];
 };
 /* ---------- MARKS painted by main.js (find bar "fd", search jump "sc") ----------
    A named DecorationSet per view, replaced whole by Ed.hl and mapped through

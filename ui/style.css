@@ -1105,6 +1105,11 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
 .lp.src .wl, .lp.src .lt, .lp.src .url { text-decoration: underline }
 .lp .tag { color: var(--tag-color, var(--accent-blue)); background: var(--tag-bg); border-radius: 999px; padding: 0 4px }
 .lp .task, .lp .hr, .lp .tbl { font-family: var(--font-monospace) }
+/* a `---` row hides its own marker when untouched, which used to leave an empty
+   line where Obsidian draws a rule; the span is empty then, so the rule is the
+   span itself. Selecting the line reveals the `---` under it, as the markers do. */
+.lp .hr { display: block; width: 100%; height: 0; margin-block: 0.45em;
+          border-top: 1px solid var(--background-modifier-border) }
 .lp .fence { display: block; font-family: var(--font-monospace); font-size: 13px; background: var(--bg-surface);
              padding: 0 8px; white-space: pre; overflow-x: auto }
 .lp .bq { color: inherit }   /* geometry (border + padding) is R15.13 below */
