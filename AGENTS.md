@@ -9,6 +9,12 @@ Tauri v2, plain-JS frontend, Linux first (AppImage, Flatpak, plain binary),
 macOS since 2026-10 (`Opensidian.app`, `packaging/macos/make-app.sh`).
 Licence: GPL-3.0-or-later for all of it, since the first commit.
 
+**Docs.** `README.md` stays byte-identical to upstream — `git diff origin/main --
+README.md` must be empty — so an upstream README edit is never a merge conflict.
+Fork-only prose (macOS build and signing, App Sandbox, interface language, the
+read-only MCP server) belongs in `README-Mac.md` (Simplified Chinese), never in
+`README.md`.
+
 ## Platforms
 One tree, two targets. Three pieces are Linux plumbing and are STUBBED off
 Linux — never emulated, never replaced by a new crate:

@@ -4,18 +4,7 @@
 # Opensidian
 Open-source and non-profit under GPLv3, vault-compatible cross-platform markdown notes app. It's based on Rust + Tauri v2 and under heavy development. We're looking for Linux distribution maintainers. Not affiliated with or endorsed by Obsidian or Dynalist Inc.; "Obsidian" is their trademark. Opensidian is a clean-room functional clone: it reimplements Obsidian's behaviour from the outside and contains none of its code.
 
-The interface speaks English and Simplified Chinese, or follows the system language — switch it in **Settings ▸ General ▸ Language**, with the palette command *Switch interface language*, or by launching with `OPENSIDIAN_LOCALE=zh-CN`.
-
 ## Install
-
-> **This fork.** `douh/opensidian` is a macOS-focused fork of
-> [jpzk/opensidian](https://github.com/jpzk/opensidian). The downloads below and
-> their signed `SHA256SUMS` are **upstream's** Linux releases; the fork publishes
-> no signed builds, so on macOS build it from source (§ Build from source ▸
-> macOS). **Settings ▸ General ▸ Check for updates** compares this build against
-> the fork's own release list *and* an optional local build folder, shows the two
-> answers separately, and only offers to reveal or download — it never claims a
-> signature it cannot verify, and inside the App Sandbox it cannot install.
 
 ### Linux x86_64 — packages
 
@@ -78,74 +67,6 @@ Tested 2026-10-03 on fresh Ubuntu 26.04 LTS and Fedora 44 with Rust 1.98.0
    cargo build --release --locked   # -> target/release/opensidian
    ```
 
-### macOS
-
-Tested 2026-10-25 on macOS 27.0.1 (arm64) with Rust 1.99.1. The system deps
-above are Linux-only: macOS needs the Xcode command line tools for the linker
-(`xcode-select --install`) and WebKit is part of the OS, so nothing else.
-
-```sh
-cd opensidian/src-tauri
-cargo build --release --locked      # -> target/release/opensidian
-./target/release/opensidian ~/Notes # a vault path; the window opens
-cargo test --locked                 # the Landlock tests skip themselves here
-```
-
-To get something Finder can launch:
-
-```sh
-packaging/macos/make-app.sh         # -> src-tauri/target/macos/Opensidian.app
-```
-
-The bundle is ad-hoc signed, which is what every local Mac build is: it runs on
-the machine that built it, and a copy that travels still needs a Developer ID
-and notarisation to pass Gatekeeper elsewhere.
-
-macOS gets the native frame: `src-tauri/tauri.macos.conf.json` turns decorations
-back on with the overlay title bar, so close/minimise/zoom are real traffic
-lights and the page runs under them (`ui/style.css` hides the Linux self-drawn
-window strip and resize grips). Plugins also see the host they actually run on:
-`os.platform()` and `process.platform` answer `darwin`, arch `arm64`/`x64`,
-instead of the hardcoded `linux`. Installation image, if you want one:
-
-```sh
-hdiutil create -volname Opensidian -srcfolder Opensidian.app -ov -format UDZO Opensidian.dmg
-```
-
-The bundle runs inside the **App Sandbox**
-(`packaging/macos/Opensidian.entitlements`, applied by `make-app.sh`). Writes
-stay in `~/Library/Containers/dev.koto.opensidian`, and a vault folder is
-reached through the native folder panel: that grant is kept as a security-scoped
-bookmark in the container's `.opensidian.json`, so the next launch opens the
-same vault without asking. Consequences worth knowing:
-
-- a path on the command line (`opensidian ~/Notes`) is not a grant; the first
-  launch takes it to the folder panel, and the folder you pick is remembered;
-- preferences moved into the container, so an older `~/.opensidian.json` is not
-  carried over — pick the vault once and it is remembered from then on;
-- "open another vault" still works: one vault per process, and the grant is
-  written to the config before the new process boots, which resolves it.
-
-The boot log states it: `[sandbox] app-sandbox=on …`, a write inside the
-container that lands, and a write to the real home that is refused. If the
-second ever says `ALLOWED`, the confinement is gone.
-
-Two things stay Linux-only for now, both plumbing rather than features:
-
-- **Landlock sandbox** (`OPENSIDIAN_LANDLOCK=1`). A Linux LSM with no macOS
-  equivalent, so a macOS launch reports `landlock: off (not available on this
-  platform)` — on macOS the App Sandbox above is the confinement.
-- **Secret storage.** The freedesktop Secret Service (gnome-keyring, KWallet,
-  KeePassXC). Plugins that store API keys report it as unsupported; the macOS
-  Keychain is not wired up yet.
-
-**Plugin browser downloads** work on macOS through the system `/usr/bin/curl`
-(one request per redirect hop, so the allowlist and byte caps still run on every
-hop). curl does not read the macOS network settings by itself, so when neither a
-`*_proxy` environment nor the app was launched by hand sets one, the system proxy
-is read from `scutil --proxy` and passed as `--proxy` — a launch from Finder on a
-proxied network therefore reaches GitHub the same way the browser does.
-
 ## Nix
 The repo ships a flake (Nix 2.4+). It pins nixpkgs unstable and builds with
 `--locked` against `src-tauri/Cargo.lock`, so the toolchain and every crate
@@ -165,49 +86,6 @@ integration tests also need a wider sandbox than the Nix build sandbox
 grants, which is why the flake runs `cargo test` from the dev shell and
 not as a flake check.
 
-## MCP server (read-only)
-
-The bundle ships `Contents/MacOS/opensidian-mcp`: a small read-only
-[Model Context Protocol](https://modelcontextprotocol.io) server over one vault,
-for any local MCP client (Claude Desktop, Cursor, a script of your own). It
-speaks MCP over stdio — one JSON-RPC message per line, no HTTP — so
-every client is configured with the same two values:
-
-- command: `/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp`
-- args: the absolute vault path, e.g. `/Users/you/Notes` (or pass no argument and
-  set `OPENSIDIAN_VAULT` in the environment instead)
-
-Clients with a JSON config take an `mcpServers` entry:
-
-```json
-{
-  "mcpServers": {
-    "opensidian": {
-      "command": "/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp",
-      "args": ["/Users/you/Notes"]
-    }
-  }
-}
-```
-
-A client that only offers form fields wants the same three things: transport
-**stdio** (not HTTP), the command above, and the vault path as its argument.
-Reconnect or restart the client after adding it. On Linux the server is the
-second binary of the same build (`target/release/opensidian-mcp`).
-
-Tools: `list_notes` (relative paths, optional `folder`/`limit`), `read_note`
-(UTF-8 text, truncated at 200 KB by default and marked as such), and
-`search_notes` (case-insensitive substring, answering file + line + the matching
-line). Nothing writes: it is a reader, `.obsidian/`, `.git/`, `.trash/` and
-`node_modules/` are never listed or searched, and a path that escapes the vault
-is refused.
-
-The helper is deliberately outside the App Sandbox: the MCP client starts it, it
-inherits nothing from the app, and it must be able to read the folder you name.
-It runs with your user's rights, like any local MCP server, and only reads.
-`make-app.sh` signs it before the app and without entitlements for exactly that
-reason.
-
 ## Licence
 GPL-3.0-or-later ([LICENSE](LICENSE)). Read [THIRD-PARTY.md](THIRD-PARTY.md) before redistributing.
 
@@ -224,8 +102,7 @@ stays on AnuPpuccin.
 Off by default. Each vault starts in restricted mode: no community plugin code runs.
 
 **Turning it on.** Open **Settings ▸ Community plugins** and switch **Restricted mode** off. The
-choice is per vault and is saved in `~/.opensidian.json` — inside the App Sandbox
-container on macOS (§ macOS above) — outside the vault, so a vault you open
+choice is per vault and is saved in `~/.opensidian.json`, outside the vault, so a vault you open
 cannot turn its own plugins on.
 
 **What that means.** With restricted mode off, the plugins you enable run code from the internet
