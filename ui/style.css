@@ -1233,6 +1233,8 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
             border: 1px solid var(--border); border-radius: 4px; padding: 0 8px; outline: none; font-size: 13px }
 #hkfilter:focus { border-color: var(--background-modifier-border-focus) }   /* themematch: focused search field border */
 #hkclear { color: var(--text-chrome-faint); cursor: pointer; width: 16px; text-align: center }
+#hkresetall { margin-left: auto; padding: 2px 10px; border-radius: 999px; background: var(--bg-surface); color: var(--text-chrome); cursor: pointer; font-size: 12px; line-height: 16px; white-space: nowrap }
+#hkresetall.off { color: var(--text-chrome-faint); pointer-events: none }
 #hkchips { display: flex; gap: 6px; height: 24px; margin: 8px 0; align-items: center }
 .hkchip { padding: 2px 10px; border-radius: 999px; background: var(--bg-surface); color: var(--text-chrome); cursor: pointer; font-size: 12px; line-height: 16px }
 .hkchip.sel { background: var(--accent-mauve); color: var(--bg-base) }

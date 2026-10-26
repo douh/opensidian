@@ -22,6 +22,7 @@ const inv = (c, a) => { const x = otel.ctx(); return TAURI.core.invoke(c, x ? Ob
 const HOSTOS = (globalThis.__opensidianHost && globalThis.__opensidianHost.os) ||
   (/Mac/i.test(navigator.platform || navigator.userAgent) ? "darwin" : "linux");
 if (HOSTOS === "darwin") document.body.classList.add("mac");
+const IS_MAC = HOSTOS === "darwin";
 /* perf-spans shim over otel: mark(name, t0, extra) = a span that started at
    t0 and ends now; push(name, ms, extra) = an already-measured span (graph
    frames); both no-ops once the backend said telemetry is off. */
@@ -8670,15 +8671,32 @@ const CMDS = [
  .sort((a, b) => a.name.localeCompare(b.name));
 let hkUser = {};                            // id -> [chords] overrides ([] = removed default)
 let keymap = {};                            // chord -> cmd (rebuilt from CMDS + hkUser)
-const hkChords = c => hkUser[c.id] || c.def;
-function hkConflicts() {                    // chord -> [cmd ids] with 2+ owners
-  const by = {};
-  for (const c of CMDS) for (const ch of hkChords(c)) (by[ch] = by[ch] || []).push(c.id);
-  return Object.fromEntries(Object.entries(by).filter(([, v]) => v.length > 1));
+let hkConf = {};                            // chord -> [cmd ids] with 2+ owners, same pass
+/* R14 canonical chord — ONE spelling for the whole app:
+     mod   Obsidian's Mod: ⌘ on macOS, Ctrl elsewhere (the only way ⌘ binds at all)
+     ctrl  a literal Control
+     alt, shift, then the key
+   Every default in CMDS spells "ctrl", so the shipped chords keep their exact
+   meaning on macOS (Ctrl+E stays Ctrl+E); a recorded ⌘ chord is stored as "mod"
+   and the file format round-trips it as Modifiers:["Mod"]. */
+const CHORD_MODS = ["mod", "ctrl", "alt", "shift"];
+const canonChord = ch => {
+  const p = String(ch == null ? "" : ch).split("+"); const key = p.pop();
+  if (key === undefined || key === "") return null;
+  const mods = CHORD_MODS.filter(m => p.includes(m));
+  return mods.concat([key]).join("+");
+};
+const hkChords = c => (hkUser[c.id] || c.def).map(canonChord).filter(Boolean);
+function hkConflicts() {                    // derived in hkRebuild, never recomputed here
+  return hkConf;
 }
-function hkRebuild() {                      // last-defined wins on conflicts (Obsidian behaviour)
-  keymap = {};
-  for (const c of CMDS) for (const ch of hkChords(c)) keymap[ch] = c;
+function hkRebuild() {                      // ONE pass: execution map + conflict table
+  keymap = {}; hkConf = {};
+  for (const c of CMDS) for (const ch of hkChords(c)) {
+    keymap[ch] = c;                         // last-defined wins (Obsidian behaviour)
+    (hkConf[ch] = hkConf[ch] || []).push(c.id);
+  }
+  for (const ch of Object.keys(hkConf)) if (hkConf[ch].length < 2) delete hkConf[ch];
 }
 hkRebuild();
 // Obsidian shape <-> chord strings. e.key names round-trip through KEYNAMES.
@@ -8686,14 +8704,18 @@ const KEYNAMES = { arrowleft: "ArrowLeft", arrowright: "ArrowRight", arrowup: "A
   pageup: "PageUp", pagedown: "PageDown", tab: "Tab", enter: "Enter", escape: "Escape", backspace: "Backspace",
   delete: "Delete", home: "Home", end: "End", insert: "Insert", " ": "Space" };
 function chordToFile(ch) {
-  const p = ch.split("+"); const k = p.pop();
-  const mods = p.map(m => ({ ctrl: "Mod", alt: "Alt", shift: "Shift" }[m])).filter(Boolean);
-  return { modifiers: mods, key: k.length === 1 || /^f\d+$/.test(k) ? k.toUpperCase() : KEYNAMES[k] || k };
+  const p = canonChord(ch).split("+"); const k = p.pop();
+  const mods = p.map(m => ({ mod: "Mod", ctrl: "Ctrl", alt: "Alt", shift: "Shift" }[m])).filter(Boolean);
+  return { modifiers: mods, key: KEYNAMES[k] || (/^f\d+$/.test(k) || k.length === 1 ? k.toUpperCase() : k) };
 }
 function fileToChord(o) {
   const m = new Set((o.modifiers || []).map(x => x.toLowerCase()));
   const k = (o.key === "Space" ? " " : String(o.key || "")).toLowerCase();
-  return ((m.has("mod") || m.has("ctrl")) ? "ctrl+" : "") + (m.has("alt") ? "alt+" : "") + (m.has("shift") ? "shift+" : "") + k;
+  // Mod is the platform command key: Cmd where it exists, Ctrl elsewhere (that
+  // is what Obsidian's own "Mod" means when the config travels between machines)
+  const mod = m.has("mod") ? (IS_MAC ? "mod+" : "ctrl+") : "";
+  return canonChord(mod + (m.has("ctrl") ? "ctrl+" : "") + (m.has("alt") ? "alt+" : "") +
+    (m.has("shift") ? "shift+" : "") + k);
 }
 async function hkLoad() {
   const m = await inv("get_hotkeys").catch(() => ({}));
@@ -8708,20 +8730,25 @@ function hkSave() {
   hkRebuild();
 }
 function hkSet(c, chords) {                 // set + collapse to "default" when equal
-  const same = chords.length === c.def.length && chords.every((x, i) => x === c.def[i]);
-  if (same) delete hkUser[c.id]; else hkUser[c.id] = chords;
+  const want = chords.map(canonChord).filter(Boolean);
+  const def = c.def.map(canonChord).filter(Boolean);
+  const same = want.length === def.length && want.every((x, i) => x === def[i]);
+  if (same) delete hkUser[c.id]; else hkUser[c.id] = want;
   hkSave();
 }
-const chordLabel = ch => ch.split("+").map(k => k === "ctrl" ? "Ctrl" : k === "alt" ? "Alt" : k === "shift" ? "Shift"
+const chordLabel = ch => ch.split("+").map(k => k === "mod" ? (IS_MAC ? "⌘" : "Ctrl")
+  : k === "ctrl" ? "Ctrl" : k === "alt" ? "Alt" : k === "shift" ? "Shift"
   : k.length === 1 ? k.toUpperCase() : (KEYNAMES[k] || k).replace(/^Arrow/, "").replace(/^./, x => x.toUpperCase())).join(" + ");
-function chordOf(e) {                       // keydown -> normalised chord (null for bare modifiers)
+function chordOf(e) {                       // keydown -> canonical chord (null for bare modifiers)
   if (["Control", "Alt", "Shift", "Meta"].includes(e.key)) return null;
   let k = e.key.toLowerCase();
   if (e.code === "Tab") k = "tab";   // X11 shift+tab arrives as ISO_Left_Tab
   // Xvfb/xdotool synthesize every F-key with a spurious Mod1 latch (alt:true
   // on F1..F12, clean on letters) — drop alt for function keys so F2 binds.
   const alt = e.altKey && !/^F\d+$/.test(e.code);
-  return (e.ctrlKey ? "ctrl+" : "") + (alt ? "alt+" : "") + (e.shiftKey ? "shift+" : "") + k;
+  // metaKey is the ⌘ half of Mod: without it no Command chord could ever match
+  return canonChord((e.metaKey ? "mod+" : "") + (e.ctrlKey ? "ctrl+" : "") +
+    (alt ? "alt+" : "") + (e.shiftKey ? "shift+" : "") + k);
 }
 /* palette source: the registry w/ current hotkey hints, PLUS one "Use theme:
    <name>" item per theme this vault actually offers (themeone item 7).
@@ -11220,7 +11247,15 @@ function showSettingsPage(id) {
   inp.oninput = renderHk;
   const clr = document.createElement("span"); clr.id = "hkclear"; clr.textContent = "⊗"; clr.title = "Clear";
   clr.onclick = () => { inp.value = ""; renderHk(); inp.focus(); };
-  bar.append(inp, clr);
+  // R14 · Restore all: the whole override map goes, so every command is back on
+  // its default in one click. Disabled (not hidden) while nothing is overridden.
+  const ra = document.createElement("span"); ra.id = "hkresetall"; ra.textContent = "Restore all";
+  ra.title = "Restore every hotkey to its default";
+  ra.onclick = () => {
+    if (!Object.keys(hkUser).length) return;
+    hkUser = {}; hkSave(); renderHk();
+  };
+  bar.append(inp, clr, ra);
   const chips = document.createElement("div"); chips.id = "hkchips";
   const list = document.createElement("div"); list.id = "hklist";
   pg.append(bar, chips, list);
@@ -11726,6 +11761,8 @@ function renderHk() {
     list.appendChild(row);
   }
   hkInfo = " [hk:" + rows.length + "]" + (hkRec ? " [hkrec:" + hkRec + "]" : "") + (confIds.size ? " [hkc:" + confIds.size + "]" : "");
+  const ra = $("hkresetall");
+  if (ra) ra.classList.toggle("off", !Object.keys(hkUser).length);
   updateTitle();
 }
 function hkKey(e) {                          // keyboard while settings is open
