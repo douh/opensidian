@@ -6758,10 +6758,10 @@ async function updateStatus(g) {
   if (!n || g.graphOn) { g.status.hidden = true; return; }
   const v = g.editor.value;
   const w = (v.match(/\S+/g) || []).length;
-  g.stWc.textContent = w + (w === 1 ? " word" : " words");
-  g.stCc.textContent = v.length + (v.length === 1 ? " char" : " chars");
+  g.stWc.textContent = i18n.count(w, " word", " words", "词");
+  g.stCc.textContent = i18n.count(v.length, " char", " chars", "字符");
   const bl = await inv("backlinks", { name: n });
-  g.stBl.textContent = bl.length + (bl.length === 1 ? " backlink" : " backlinks");
+  g.stBl.textContent = i18n.count(bl.length, " backlink", " backlinks", "条反向链接");
   g.status.hidden = false;
 }
 
@@ -7024,7 +7024,15 @@ function closeModal() {
 }
 function mdFilter() {
   const q = $("minput").value.trim();
-  mdItems = mdSrc().map((it, i) => [fuzzy(q, it.label), i, it])
+  /* A translated label must stay SEARCHABLE: "设置" has to find "Open settings",
+     so the palette scores the English name and its translation and keeps the
+     better of the two. The switcher (file names) is never translated. */
+  const score = label => {
+    const a = fuzzy(q, label);
+    const b = modalKind === "cp" ? fuzzy(q, t(label)) : -1;
+    return a < 0 ? b : b < 0 ? a : Math.min(a, b);
+  };
+  mdItems = mdSrc().map((it, i) => [score(it.label), i, it])
     .filter(([s]) => s >= 0)
     .sort((a, b) => a[0] - b[0] || a[1] - b[1])  // ties keep source (MRU) order
     .slice(0, 10).map(([, , it]) => it);
@@ -7137,7 +7145,8 @@ function renderModal() {
   mdItems.forEach((it, i) => {
     const d = document.createElement("div");
     d.className = "mrow" + (i === mdSel ? " sel" : "");
-    const l = document.createElement("span"); l.textContent = it.label;
+    /* palette rows are commands: translate the label, never a file name */
+    const l = document.createElement("span"); l.textContent = modalKind === "cp" ? t(it.label) : it.label;
     const h = document.createElement("span"); h.className = "mhint";
     h.textContent = it.hint || "";
     d.append(l, h);
@@ -8584,6 +8593,7 @@ async function undoCloseTab() {
 }
 const CMDS = [
   ["app:open-settings",        "Open settings",                       ["ctrl+,"],               () => cmdSettings()],
+  ["app:switch-language",      "Switch interface language",           [],                       () => switchLanguage()],
   // R14: the theme switch is a registry entry like any other — no bespoke
   // keystroke, no menu item of its own. It ships with NO default chord on
   // purpose: the palette is the road, so the smoke phase has to drive the real
@@ -8932,6 +8942,19 @@ document.addEventListener("keydown", e => {
 $("stab-files").onclick = () => setPane("files");
 $("collapsebtn").onclick = cmdToggleSide;
 $("setbtn").onclick = cmdSettings;   // same command the palette runs, so the modal state stays in one place
+i18n.applyStatic();                  // static chrome only: [data] ids in i18n.js STATIC
+/* Interface language cycles "" (follow system) -> zh-CN -> en. The choice is a
+   per-window preference in localStorage, so it does not touch ~/.opensidian.json
+   and a reload is enough to re-render every label. The General > Language row
+   (langCtl) sets an explicit value through the same setter. */
+function setLocale(next) {
+  try { localStorage.setItem("os.locale", next); } catch (_) {}
+  location.reload();
+}
+function switchLanguage() {
+  const cur = i18n.saved || "";
+  setLocale(cur === "zh-CN" ? "en" : cur === "en" ? "" : "zh-CN");
+}
 $("stab-search").onclick = () => setPane("search");
 $("stab-bm").onclick = () => setPane("bm");
 $("sinput").oninput = () => {              // debounce 60ms (was 150: sized for the disk-walking search; the index answers in ~1ms, the DOM for ~400 hits in a few ms)
@@ -10616,9 +10639,9 @@ async function enterMode(m) {
   $("p-actions").style.display = "none";
   $("p-sub").hidden = false;
   $("p-name").hidden = m !== "create";
-  $("p-go").textContent = m === "create" ? "Create vault" : "Open this folder";
+  $("p-go").textContent = m === "create" ? t("Create vault") : t("Open this folder");
   $("p-gonew").hidden = !vaultPath;          // vaultbleed: open/create in a NEW window, keep this one
-  $("p-gonew").textContent = m === "create" ? "Create in new window" : "Open in new window";
+  $("p-gonew").textContent = m === "create" ? t("Create in new window") : t("Open in new window");
   $("p-err").textContent = "";
   if (SANDBOXED) {
     // the panel IS the browser here, and the grant it hands the process is what
@@ -11203,11 +11226,11 @@ function buildSettingsNav() {
   for (const e of SMODEL.nav) {
     if (e.group !== group) {
       group = e.group;
-      const h = document.createElement("div"); h.className = "snavh"; h.textContent = group;
+      const h = document.createElement("div"); h.className = "snavh"; h.textContent = t(group);
       nav.appendChild(h);
     }
     const d = document.createElement("div");
-    d.className = "snavi"; d.textContent = e.entry;
+    d.className = "snavi"; d.textContent = t(e.entry);
     d.dataset.pane = e.id; d.tabIndex = 0;
     d.onclick = () => showSettingsPage(e.id);
     d.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); showSettingsPage(e.id); } };
@@ -11237,21 +11260,21 @@ function showSettingsPage(id) {
   if (pane !== "hotkeys") {
     if (!rows.length) {                     // fallback only: since goal/noplugins every nav pane has rows
       const d = document.createElement("div"); d.className = "sempty";
-      d.textContent = (e ? e.entry : pane) + " — nothing to configure yet.";
+      d.textContent = t(e ? e.entry : pane) + " — " + t("nothing to configure yet.");
       pg.appendChild(d);
     } else buildSettingsRows(pg, rows, pane);
     return updateTitle();                   // [spane:] follows the pane that is actually built
   }
   const bar = document.createElement("div"); bar.id = "hkbar";
   const inp = document.createElement("input");
-  inp.id = "hkfilter"; inp.placeholder = "Filter..."; inp.spellcheck = false; inp.autocomplete = "off";
+  inp.id = "hkfilter"; inp.placeholder = t("Filter..."); inp.spellcheck = false; inp.autocomplete = "off";
   inp.oninput = renderHk;
-  const clr = document.createElement("span"); clr.id = "hkclear"; clr.textContent = "⊗"; clr.title = "Clear";
+  const clr = document.createElement("span"); clr.id = "hkclear"; clr.textContent = "⊗"; clr.title = t("Clear");
   clr.onclick = () => { inp.value = ""; renderHk(); inp.focus(); };
   // R14 · Restore all: the whole override map goes, so every command is back on
   // its default in one click. Disabled (not hidden) while nothing is overridden.
-  const ra = document.createElement("span"); ra.id = "hkresetall"; ra.textContent = "Restore all";
-  ra.title = "Restore every hotkey to its default";
+  const ra = document.createElement("span"); ra.id = "hkresetall"; ra.textContent = t("Restore all");
+  ra.title = t("Restore every hotkey to its default");
   ra.onclick = () => {
     if (!Object.keys(hkUser).length) return;
     hkUser = {}; hkSave(); renderHk();
@@ -11287,6 +11310,7 @@ const sOpenExt = url => inv("open_external", { url }).catch(err => say("Open: " 
 const SACT = {
   help: () => sOpenExt("https://www.opensidian.org"),
   check_updates: (r, d) => sCheckUpdates(d),
+  interface_language: (r, d) => openLangMenu(d),
 };
 /* Check for updates (updates.rs update_check): ONE signed-release check per press,
    never in the background. Rust fetches the GitHub release list + SHA256SUMS(.asc)
@@ -11320,16 +11344,16 @@ function sCheckLocal(info) {
     }).catch(err => say("Local folder: " + String(err && err.message || err)));
     el.textContent = String(r.text || "");
     if (!r.configured || r.status === "unreadable") {
-      el.append(link(" Choose folder…", pick));
+      el.append(link(" " + t("Choose folder…"), pick));
     } else if (r.status === "available") {
-      el.textContent = String(r.text).replace(/[.\s]+$/, "") + " — install it?";
+      el.textContent = String(r.text).replace(/[.\s]+$/, "") + " — " + t("install it?");
       el.append(
-        link(" Reveal", () => inv("update_local_reveal", { path: String(r.path) })
+        link(" " + t("Reveal"), () => inv("update_local_reveal", { path: String(r.path) })
           .catch(err => say("Reveal: " + String(err && err.message || err)))),
-        link(" Later", () => { el.textContent = "Kept the running build."; }),
+        link(" " + t("Later"), () => { el.textContent = "Kept the running build."; }),
       );
     } else if (r.status === "none") {
-      el.append(link(" Choose another folder…", pick));
+      el.append(link(" " + t("Choose another folder…"), pick));
     }
   }).catch(err => say("Local check: " + String(err && err.message || err)));
 }
@@ -11339,7 +11363,7 @@ function sCheckUpdates(d) {
   if (!info) return;
   let out = info.querySelector(".supd");
   if (!out) { out = document.createElement("div"); out.className = "sdesc supd"; info.appendChild(out); }
-  out.textContent = "Checking douh/opensidian and the local build folder…";
+  out.textContent = t("Checking douh/opensidian and the local build folder…");
   sUpdBusy = true; sUpd = { status: "checking", latest: "" }; updateTitle();
   sCheckLocal(info);
   inv("update_check").then(res => {
@@ -11347,12 +11371,12 @@ function sCheckUpdates(d) {
     out.dataset.status = sUpd.status;
     if (res.status === "available" && res.url) {
       // R14: compare done in Rust (local current vs release); we only ask.
-      out.textContent = String(res.text).replace(/[.\s]+$/, "") + " — install it?";
+      out.textContent = String(res.text).replace(/[.\s]+$/, "") + " — " + t("install it?");
       const a = document.createElement("span"); a.className = "slink supdlink"; a.tabIndex = 0;
-      a.textContent = " Download";
+      a.textContent = " " + t("Download");
       a.onclick = ev => { ev.stopPropagation(); sOpenExt(String(res.url)); };
       const later = document.createElement("span"); later.className = "slink supdlink"; later.tabIndex = 0;
-      later.textContent = " Later";
+      later.textContent = " " + t("Later");
       later.onclick = ev => { ev.stopPropagation(); out.textContent = "Kept local " + (res.current || "") + "."; };
       out.append(a, later);
     } else {
@@ -11366,11 +11390,12 @@ function sCheckUpdates(d) {
 }
 const sactN = {};
 function sactCtl(r) {
+  if (r.action === "interface_language") return langCtl(r);   // a picker, not a verb
   const d = document.createElement("div");
   d.className = "sctl button live"; d.dataset.act = r.action;
   const b = document.createElement("span"); b.className = "sbtn"; b.tabIndex = 0;
   b.setAttribute("role", "button");
-  b.textContent = r.default_shown === "-" ? r.action : r.default_shown;
+  b.textContent = r.default_shown === "-" ? t(r.action) : t(r.default_shown);
   const run = ev => {
     ev.preventDefault(); ev.stopPropagation();
     sactN[r.action] = (sactN[r.action] || 0) + 1;
@@ -11382,6 +11407,46 @@ function sactCtl(r) {
   b.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") run(ev); };
   d.appendChild(b);
   return d;
+}
+/* Language (goal/i18n): Obsidian's General > Language dropdown, the app's own
+   locale instead of a transcribed dead value. The label is the language IN
+   EFFECT, so "Follow system" still answers "what am I reading right now"; the
+   menu offers the three states the preference can hold, each in its own name.
+   Click routes through SACT like every other action row, so [sact:interface_language:n]
+   still counts presses. */
+function langCtl(r) {
+  const d = document.createElement("div");
+  d.className = "sctl dropdown live";
+  d.id = "svlang";
+  d.tabIndex = 0;
+  d.setAttribute("role", "button");
+  d.setAttribute("aria-haspopup", "menu");
+  d.textContent = i18n.langName(i18n.locale);
+  const open = ev => {
+    ev.preventDefault(); ev.stopPropagation();
+    sactN[r.action] = (sactN[r.action] || 0) + 1;
+    SACT[r.action](r, d);
+    updateTitle();
+  };
+  d.onmousedown = ev => ev.stopPropagation();
+  d.onclick = open;
+  d.onkeydown = ev => { if (ev.key === "Enter" || ev.key === " ") open(ev); };
+  return d;
+}
+function openLangMenu(anchor) {
+  closeMenu();
+  const m = document.createElement("div");
+  m.className = "ctxmenu";
+  const cur = i18n.saved || "";
+  for (const [val, label] of [["", t("Follow system")], ["en", "English"], ["zh-CN", "简体中文"]]) {
+    const it = document.createElement("div");
+    it.textContent = (val === cur ? "✓ " : "") + label;
+    it.onmousedown = ev => ev.stopPropagation();
+    it.onclick = () => { closeMenu(); setLocale(val); };
+    m.appendChild(it);
+  }
+  const b = anchor.getBoundingClientRect();
+  placeMenu(m, Math.round(b.left), Math.round(b.bottom + 4));
 }
 /* bug-ui census [bui:] (gate phase bugui, GitHub #9 #11 #12 #14) — measurements off the live DOM:
      cur=<bad>/<n>:<first bad>  every enabled clickable in the open Settings modal (button, role=button,
@@ -11458,7 +11523,7 @@ function sactTok() {
    popup. The text is the live count, the shape Obsidian's own row shows
    ("0 enabled"); toggling goes through toggleSnippet(), the same function the
    injection path uses, so the pane and the <head> cannot disagree. */
-const snipCtlLabel = () => vaultSnipsOn.length + " enabled";
+const snipCtlLabel = () => i18n.count(vaultSnipsOn.length, " enabled", " enabled", "个已启用");
 function snipCtl() {
   const d = document.createElement("div");
   d.className = "sctl dropdown live";
@@ -11629,8 +11694,11 @@ function sctl(r) {                            // the control cell for one row, o
   }
   const d = document.createElement("div");
   d.className = "sctl " + r.control;
-  const parts = (t, cls) => t.split(" / ").forEach(p => {
-    const s = document.createElement("span"); s.className = cls; s.textContent = p; d.appendChild(s);
+  /* goal/i18n: these values are transcribed constants, but the same slot can hold
+     user data, so they go through i18n.tValue — an allow-list — rather than t().
+     The helper's parameter is renamed because "t" is now the translator. */
+  const parts = (txt, cls) => txt.split(" / ").forEach(p => {
+    const s = document.createElement("span"); s.className = cls; s.textContent = i18n.tValue(p); d.appendChild(s);
   });
   switch (r.control) {
     case "none": return null;                 // Obsidian shows label + description and nothing else
@@ -11638,12 +11706,14 @@ function sctl(r) {                            // the control cell for one row, o
       if (/^on\b/.test(v)) d.classList.add("on");       // "on", "on + gear + plus", ...
       d.appendChild(document.createElement("i"));       // the knob
       break;
-    case "dropdown": case "text": case "list":
-      d.textContent = v.length > 48 ? v.slice(0, 47) + "…" : v;
+    case "dropdown": case "text": case "list": {
+      const s0 = i18n.tValue(v);
+      d.textContent = s0.length > 48 ? s0.slice(0, 47) + "…" : s0;
       break;
+    }
     case "color": {
       const sw = document.createElement("span"); sw.className = "sw";
-      d.appendChild(sw); d.appendChild(document.createTextNode(v.replace(" + reset", "")));
+      d.appendChild(sw); d.appendChild(document.createTextNode(i18n.tValue(v.replace(" + reset", ""))));
       break;
     }
     case "slider": {
@@ -11656,11 +11726,11 @@ function sctl(r) {                            // the control cell for one row, o
       parts(v.replace(" (accent-filled)", ""), "sbtn" + (v.includes("(accent-filled)") ? " acc" : ""));
       break;
     case "nav":
-      if (v) { const s = document.createElement("span"); s.className = "nv"; s.textContent = v; d.appendChild(s); }
+      if (v) { const s = document.createElement("span"); s.className = "nv"; s.textContent = i18n.tValue(v); d.appendChild(s); }
       d.appendChild(document.createTextNode("›"));
       break;
     default:
-      d.textContent = v;
+      d.textContent = i18n.tValue(v);
   }
   return d;
 }
@@ -11707,14 +11777,14 @@ function buildSettingsRows(pg, rows, pane) {
     const sec = r.section || "";
     if (sec !== section) {                    // a new section = its own heading + card, like Obsidian
       section = sec;
-      if (sec) { const h = document.createElement("div"); h.className = "ssec"; h.textContent = sec; pg.appendChild(h); }
+      if (sec) { const h = document.createElement("div"); h.className = "ssec"; h.textContent = t(sec); pg.appendChild(h); }
       card = document.createElement("div"); card.className = "scard"; pg.appendChild(card);
     }
     const row = document.createElement("div");
     row.className = "srow" + (r.enabled ? "" : " dis");
-    if (!r.enabled) { row.setAttribute("aria-disabled", "true"); row.title = SDIS_TITLE; }
+    if (!r.enabled) { row.setAttribute("aria-disabled", "true"); row.title = t(SDIS_TITLE); }
     const info = document.createElement("div"); info.className = "sinfo";
-    const lb = document.createElement("div"); lb.className = "slabel"; lb.textContent = r.label;
+    const lb = document.createElement("div"); lb.className = "slabel"; lb.textContent = t(r.label);
     const link = r.desc === "(external link row)";   // Obsidian's bare link line, no description
     if (link) { lb.classList.add("slink"); row.classList.add("linkrow"); }
     info.appendChild(lb);
@@ -11747,7 +11817,7 @@ function hkRows() {                          // fuzzy filter AND active chip
   const conf = hkConflicts();
   const confIds = new Set(Object.values(conf).flat());
   return CMDS.filter(c => {
-    if (fuzzy(q, c.name) < 0) return false;
+    if (fuzzy(q, c.name) < 0 && fuzzy(q, t(c.name)) < 0) return false;
     const chs = hkChords(c);
     switch (hkChip) {
       case "assigned":   return chs.length > 0;
@@ -11766,13 +11836,13 @@ function renderHk() {
   const chips = $("hkchips"); chips.innerHTML = "";
   if (confIds.size) {
     const d = document.createElement("span"); d.className = "hkchip conf" + (hkChip === "conflicts" ? " sel" : "");
-    d.textContent = "Conflicts " + confIds.size;
+    d.textContent = t("Conflicts " + confIds.size);
     d.onclick = () => { hkChip = "conflicts"; $("hkfilter").value = ""; renderHk(); };
     chips.appendChild(d);
   }
   for (const [k, l] of HKCHIPS) {
     const d = document.createElement("span"); d.className = "hkchip" + (hkChip === k ? " sel" : "");
-    d.textContent = l;
+    d.textContent = t(l);
     d.onclick = () => { hkChip = k; renderHk(); };
     chips.appendChild(d);
   }
@@ -11781,26 +11851,26 @@ function renderHk() {
   for (const c of rows) {
     const chs = hkChords(c);
     const row = document.createElement("div"); row.className = "hkrow";
-    const nm = document.createElement("span"); nm.className = "hkname"; nm.textContent = c.name;
+    const nm = document.createElement("span"); nm.className = "hkname"; nm.textContent = t(c.name);
     const keys = document.createElement("span"); keys.className = "hkkeys";
     if (hkRec === c.id) {
-      const k = document.createElement("span"); k.className = "hkkey rec"; k.textContent = "Press hotkey...";
+      const k = document.createElement("span"); k.className = "hkkey rec"; k.textContent = t("Press hotkey...");
       keys.appendChild(k);
     } else if (!chs.length) {
-      const k = document.createElement("span"); k.className = "hkkey blank"; k.textContent = "Blank";
+      const k = document.createElement("span"); k.className = "hkkey blank"; k.textContent = t("Blank");
       keys.appendChild(k);
     } else for (const ch of chs) {
       const k = document.createElement("span"); k.className = "hkkey" + (conf[ch] ? " conf" : "");
       k.textContent = chordLabel(ch);
-      const x = document.createElement("span"); x.className = "hkx"; x.innerHTML = '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>'; x.title = "Remove";
+      const x = document.createElement("span"); x.className = "hkx"; x.innerHTML = '<svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg>'; x.title = t("Remove");
       x.onclick = () => { hkSet(c, chs.filter(y => y !== ch)); renderHk(); };
       k.appendChild(x);
       keys.appendChild(k);
     }
-    const rs = document.createElement("button"); rs.className = "hkbtn hkrestore"; rs.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.6"/><path d="M3 2.5v3h3"/></svg>'; rs.title = "Restore default";
+    const rs = document.createElement("button"); rs.className = "hkbtn hkrestore"; rs.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8a5 5 0 1 0 1.5-3.6"/><path d="M3 2.5v3h3"/></svg>'; rs.title = t("Restore default");
     rs.style.visibility = c.id in hkUser ? "visible" : "hidden";
     rs.onclick = () => { delete hkUser[c.id]; hkSave(); renderHk(); };
-    const add = document.createElement("button"); add.className = "hkbtn hkadd"; add.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6"/></svg>'; add.title = "Customize this command";
+    const add = document.createElement("button"); add.className = "hkbtn hkadd"; add.innerHTML = '<svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="8" cy="8" r="6"/><path d="M8 5v6M5 8h6"/></svg>'; add.title = t("Customize this command");
     add.onclick = () => { hkRec = hkRec === c.id ? null : c.id; renderHk(); };
     row.append(nm, keys, rs, add);
     list.appendChild(row);

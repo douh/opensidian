@@ -157,7 +157,16 @@ pub const REMOVED_ROWS: &[(&str, &str)] = &[
 /// (tab, label) -> action: a row whose control runs an app ACTION rather than
 /// writing a config key. Enabled like a backed row; ui/main.js SACT must carry a
 /// handler for every action named here (`actions_are_all_handled_by_the_ui`).
-const ACTIONS: &[(&str, &str, &str)] = &[("general", "Help", "help"), ("general", VERSION_LABEL, "check_updates")];
+const ACTIONS: &[(&str, &str, &str)] = &[
+    ("general", "Help", "help"),
+    ("general", VERSION_LABEL, "check_updates"),
+    // goal/i18n: Obsidian's General > Language dropdown, wired to the app's own
+    // locale (ui/i18n.js). It is an ACTION row rather than a config key because
+    // the choice is a per-window preference in the webview's localStorage, not a
+    // settings.json value — and an action keeps the row enabled without inventing
+    // a key main.rs would have to read.
+    ("general", "Language", "interface_language"),
+];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -412,6 +421,37 @@ mod tests {
         }
     }
 
+    /* goal/i18n: ui/i18n.js is keyed by the English sentence, so a label that is
+       re-worded here silently loses its Chinese text and nobody notices until a
+       user opens the pane. This pins the two files together: every row label and
+       every nav entry carries a dictionary entry. "Version <n>" is exempt — it is
+       matched by a pattern in t(), not by a literal key. */
+    #[test]
+    fn every_settings_label_has_a_translation() {
+        let js = include_str!("../../ui/i18n.js");
+        for r in rows() {
+            // "(filter field)" and friends are census placeholders, not labels, and
+            // the versioned labels are matched by a pattern in t() instead of a key
+            if r.label.starts_with("Version ") || r.label.starts_with("Plugin API version ")
+                || r.label.starts_with('(') { continue; }
+            assert!(js.contains(&format!("\"{}\":", r.label)), "no zh translation for row label {:?}", r.label);
+        }
+        for n in nav() {
+            assert!(js.contains(&format!("\"{}\":", n.entry)), "no zh translation for nav entry {:?}", n.entry);
+        }
+    }
+
+    /* The translator is a global the app script calls while it defines its tables,
+       so i18n.js has to run first — main.js is a classic script, not a module, and
+       nothing would fail loudly if the order were reversed. */
+    #[test]
+    fn i18n_runs_before_the_app_script() {
+        let html = include_str!("../../ui/index.html");
+        let tr = html.find("src=\"i18n.js\"").expect("index.html loads i18n.js");
+        let app = html.find("src=\"main.js\"").expect("index.html loads main.js");
+        assert!(tr < app, "i18n.js must load before main.js: t() has to exist at boot");
+    }
+
     /* THE invariant of feedback #19 (brief section 1). Both directions:
        enabled => names a key that really exists; no key => renders disabled. */
     #[test]
@@ -461,7 +501,10 @@ mod tests {
         // opens https://www.opensidian.org, recorded in /workspace/goal/settings-general/progress.md.
         // 12 -> 13 (goal settings-general): the General top row's "Check for updates" is an
         // ACTION row (updates.rs: signed GitHub release check), same progress.md.
-        assert_eq!(enabled, 13, "enabled-row count changed — say why in progress.md (R30)");
+        // 13 -> 14 (goal/i18n): General > Language is an ACTION row opening the
+        // in-app language menu (ui/i18n.js; the choice is a per-window pref, not a
+        // config key), so it is enabled like Help and Check for updates.
+        assert_eq!(enabled, 14, "enabled-row count changed — say why in progress.md (R30)");
     }
 
     /// a key is "real" only if main.rs actually reads or writes it

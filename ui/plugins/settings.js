@@ -92,10 +92,12 @@
       if (typeof sPane !== "undefined" && sPane === pane) d.classList.add("sel");
       n.appendChild(d);
     };
-    entry("community", "Community plugins");
+    /* goal/i18n: this file spells "t" as a loop variable, so the nav labels call
+       i18n.t explicitly instead of relying on the bare global. */
+    entry("community", i18n.t("Community plugins"));
     const tabs = setting.pluginTabs.filter(t => t && t.id);
     if (!tabs.length) return;
-    const h = el("div", "snavh", "Community plugins"); h.dataset.cp = "1";
+    const h = el("div", "snavh", i18n.t("Community plugins")); h.dataset.cp = "1";
     n.appendChild(h);
     for (const t of tabs.slice().sort((a, b) => String(a.name).localeCompare(String(b.name))))
       entry("plg:" + t.id, String(t.name || t.id), t.icon);

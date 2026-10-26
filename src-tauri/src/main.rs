@@ -3605,6 +3605,7 @@ fn host_js() -> String {
         "x86_64" => "x64",
         other => other,
     };
+    let locale = std::env::var("OPENSIDIAN_LOCALE").unwrap_or_default();
     let typ = match os {
         "darwin" => "Darwin",
         "linux" => "Linux",
@@ -3618,7 +3619,7 @@ fn host_js() -> String {
     #[cfg(not(target_os = "macos"))]
     let sandbox = false;
     format!(
-        "globalThis.__opensidianHost = Object.freeze({{ os: '{os}', type: '{typ}', arch: '{arch}', machine: '{}', sandbox: {sandbox} }});",
+        "globalThis.__opensidianHost = Object.freeze({{ os: '{os}', type: '{typ}', arch: '{arch}', machine: '{}', sandbox: {sandbox}, locale: '{locale}' }});",
         std::env::consts::ARCH
     )
 }
@@ -9948,8 +9949,16 @@ mod tests {
         assert!(qs.contains("label: n,"), "each item's label IS the note name");
         assert!(!qs.contains("content") && !qs.contains("read_note"), "it never reads bodies");
         assert!(
-            UI.contains(r#"mdItems = mdSrc().map((it, i) => [fuzzy(q, it.label), i, it])"#),
+            UI.contains(r#"mdItems = mdSrc().map((it, i) => [score(it.label), i, it])"#)
+                && UI.contains("const a = fuzzy(q, label);"),
             "the filter scores the label"
+        );
+        // goal/i18n: the palette ALSO scores the translation of its label (so a
+        // Chinese query finds "Open settings"), which must stay confined to the
+        // palette — the switcher lists file names and is never translated.
+        assert!(
+            UI.contains(r#"const b = modalKind === "cp" ? fuzzy(q, t(label)) : -1;"#),
+            "only the command palette scores a translated label"
         );
         assert!(
             UI.contains(r#"await Promise.all([inv("list_folders"), inv("list_notes"), inv("list_images")]);"#)

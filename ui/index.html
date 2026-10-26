@@ -85,11 +85,11 @@
     <div id="ptitle"><img id="plogo" data-src="logo.svg" alt="" width="36" height="36"><span id="ptname">Opensidian</span></div>
     <div id="p-actions">
       <div class="prow">
-        <div class="ptext"><b>Create new vault</b><span>Create a new vault under a folder.</span></div>
+        <div class="ptext"><b id="p-create-b">Create new vault</b><span id="p-create-s">Create a new vault under a folder.</span></div>
         <button id="p-create">Create</button>
       </div>
       <div class="prow">
-        <div class="ptext"><b>Open folder as vault</b><span>Choose an existing folder of Markdown files.</span></div>
+        <div class="ptext"><b id="p-open-b">Open folder as vault</b><span id="p-open-s">Choose an existing folder of Markdown files.</span></div>
         <button id="p-open">Open</button>
       </div>
       <ul id="p-recent"></ul>
@@ -116,7 +116,7 @@
   <div id="mfoot" hidden></div>
 </div></div>
 <div id="settings" hidden><div id="sbox">
-  <div id="shead"><span>Settings</span><button id="sclose" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
+  <div id="shead"><span id="shead-t">Settings</span><button id="sclose" title="Close"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3l10 10M13 3L3 13"/></svg></button></div>
   <div id="sbody"><div id="snav"></div><div id="spage"></div></div>
 </div></div>
 <div id="rnbox" hidden><input id="rninput" spellcheck="false" autocomplete="off" placeholder="new name"></div>
@@ -162,9 +162,9 @@
 <div id="bmebox" hidden><div id="bmecard">
   <button id="bme-x" hidden aria-label="Close">×</button>
   <div id="bmetitle">Edit bookmark</div>
-  <div class="bmerow"><span class="bmelbl">Path</span><input id="bme-path" readonly tabindex="-1"></div>
-  <div class="bmerow" id="bme-trow" hidden><span class="bmelbl">Title</span><input id="bme-title" spellcheck="false"></div>
-  <div class="bmerow"><span class="bmelbl">Bookmark group</span><select id="bme-grp"></select></div>
+  <div class="bmerow"><span class="bmelbl" id="bme-lpath">Path</span><input id="bme-path" readonly tabindex="-1"></div>
+  <div class="bmerow" id="bme-trow" hidden><span class="bmelbl" id="bme-ltitle">Title</span><input id="bme-title" spellcheck="false"></div>
+  <div class="bmerow"><span class="bmelbl" id="bme-lgrp">Bookmark group</span><select id="bme-grp"></select></div>
   <div id="bmebtns">
     <button id="bme-no">Cancel</button>
     <button id="bme-yes">Save</button>
@@ -196,6 +196,7 @@
 <script src="plugins/canvas.js"></script>
 <script src="plugins/canvas-history.js"></script>
 <script src="plugins/canvas-cards.js"></script>
+<script src="i18n.js"></script>
 <script src="keychain.js"></script>
 <script src="main.js"></script>
 </body></html>
