@@ -4382,6 +4382,11 @@ function tabMenu(e, g, i, hdr) {
   if (!hdr) { pinRow(); linkRow(); }
   item("Backlinks in document", null, "Missing subsystem: an in-document backlinks section, appended to the BOTTOM OF THE NOTE PANE; ours is a right-sidebar pane (R27), a different surface");
   item("Reading view", () => { closeMenu(); setMode(g, "reading"); }, null, tab.mode === "reading");     // WIRED: setMode (R38.10)
+  // Local affordance, NOT an Obsidian row: the Live Preview/Source bit has no
+  // control of its own here (the palette command flips an invisible flag, and
+  // the direction depends on that flag rather than on what is on screen), so
+  // the third state was effectively unreachable from the UI.
+  item("Live preview", () => { closeMenu(); setMode(g, "livepreview"); }, null, tab.mode === "livepreview");
   item("Source mode",  () => { closeMenu(); setMode(g, "source"); },  null, tab.mode === "source");      // WIRED: setMode — the ✓ is the R12.4 radio, now a marker element
   // ---- group 3 (4 rows) ----
   sep();
