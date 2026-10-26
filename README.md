@@ -23,7 +23,6 @@ Open-source and non-profit under GPLv3, vault-compatible cross-platform markdown
   types are refused and left where they are.
 
 ## Install
-Linux x86_64. Download one:
 
 > **This fork.** `douh/opensidian` is a macOS-focused fork of
 > [jpzk/opensidian](https://github.com/jpzk/opensidian). The downloads below and
@@ -34,20 +33,30 @@ Linux x86_64. Download one:
 > answers separately, and only offers to reveal or download — it never claims a
 > signature it cannot verify, and inside the App Sandbox it cannot install.
 
-| Download | Choose it if | Tested on (fresh install, 2026-10-24) |
+### Linux x86_64 — packages
+
+Download one:
+
+| Download | Choose it if | Tested on (fresh install, 2026-10-25) |
 |---|---|---|
-| [slim AppImage](https://github.com/jpzk/opensidian/releases/download/v0.8.1/opensidian-0.8.1-x86_64-slim.AppImage) | you want the smallest file and have WebKitGTK 4.1 | Fedora 44 (`sudo dnf install webkit2gtk4.1`), Ubuntu 26.04 LTS (`sudo apt install libwebkit2gtk-4.1-0`) |
-| [portable AppImage](https://github.com/jpzk/opensidian/releases/download/v0.8.1/opensidian-0.8.1-x86_64-portable.AppImage) | you want nothing to install: WebKit is bundled (needs only the X11/GL/font libraries every desktop has) | Fedora 44, Ubuntu 26.04 LTS |
-| [Flatpak](https://github.com/jpzk/opensidian/releases/download/v0.8.1/opensidian-0.8.1-x86_64.flatpak) | you want it sandboxed; pulls the GNOME 49 runtime from Flathub on first install | Fedora 44, Ubuntu 26.04 LTS (`flatpak` package installed) |
-| [RPM](https://github.com/jpzk/opensidian/releases/download/v0.8.1/opensidian-0.8.1-x86_64.rpm) | you run Fedora and want a system package with a menu entry and icon; dnf pulls WebKitGTK 4.1 for you | Fedora 44 (`sudo dnf install ./opensidian-0.8.1-x86_64.rpm`) |
-| [DEB](https://github.com/jpzk/opensidian/releases/download/v0.8.1/opensidian-0.8.1-x86_64.deb) | you run Debian or Ubuntu and want a system package with a menu entry and icon; apt pulls WebKitGTK 4.1 for you | Debian 13, Ubuntu 26.04 LTS (`sudo apt install ./opensidian-0.8.1-x86_64.deb`) |
+| [slim AppImage](https://github.com/jpzk/opensidian/releases/download/v0.9.0/opensidian-0.9.0-x86_64-slim.AppImage) | you want the smallest file and have WebKitGTK 4.1 | Fedora 44 (`sudo dnf install webkit2gtk4.1`), Ubuntu 26.04 LTS (`sudo apt install libwebkit2gtk-4.1-0`) |
+| [portable AppImage](https://github.com/jpzk/opensidian/releases/download/v0.9.0/opensidian-0.9.0-x86_64-portable.AppImage) | you want nothing to install: WebKit is bundled (needs only the X11/GL/font libraries every desktop has) | Fedora 44, Ubuntu 26.04 LTS |
+| [Flatpak](https://github.com/jpzk/opensidian/releases/download/v0.9.0/opensidian-0.9.0-x86_64.flatpak) | you want it sandboxed; pulls the GNOME 49 runtime from Flathub on first install | Fedora 44, Ubuntu 26.04 LTS (`flatpak` package installed) |
+| [RPM](https://github.com/jpzk/opensidian/releases/download/v0.9.0/opensidian-0.9.0-x86_64.rpm) | you run Fedora and want a system package with a menu entry and icon; dnf pulls WebKitGTK 4.1 for you | Fedora 44 (`sudo dnf install ./opensidian-0.9.0-x86_64.rpm`) |
+| [DEB](https://github.com/jpzk/opensidian/releases/download/v0.9.0/opensidian-0.9.0-x86_64.deb) | you run Debian or Ubuntu and want a system package with a menu entry and icon; apt pulls WebKitGTK 4.1 for you | Debian 13, Ubuntu 26.04 LTS (`sudo apt install ./opensidian-0.9.0-x86_64.deb`) |
+
+### Nix & NixOS
+
+```sh
+nix profile add github:jpzk/opensidian
+```
 
 ## Verify your download
 `SHA256SUMS` is signed with key `A6E6 9ED6 BC47 79F3 2817  2148 4CC1 AFDE 15B6 4EA3`:
 
 ```sh
-curl -LO https://github.com/jpzk/opensidian/releases/download/v0.8.1/SHA256SUMS \
-     -LO https://github.com/jpzk/opensidian/releases/download/v0.8.1/SHA256SUMS.asc
+curl -LO https://github.com/jpzk/opensidian/releases/download/v0.9.0/SHA256SUMS \
+     -LO https://github.com/jpzk/opensidian/releases/download/v0.9.0/SHA256SUMS.asc
 gpg --keyserver hkps://keys.openpgp.org --recv-keys A6E69ED6BC4779F3281721484CC1AFDE15B64EA3
 gpg --verify SHA256SUMS.asc SHA256SUMS
 sha256sum -c --ignore-missing SHA256SUMS
@@ -152,6 +161,25 @@ hop). curl does not read the macOS network settings by itself, so when neither a
 `*_proxy` environment nor the app was launched by hand sets one, the system proxy
 is read from `scutil --proxy` and passed as `--proxy` — a launch from Finder on a
 proxied network therefore reaches GitHub the same way the browser does.
+
+## Nix
+The repo ships a flake (Nix 2.4+). It pins nixpkgs unstable and builds with
+`--locked` against `src-tauri/Cargo.lock`, so the toolchain and every crate
+are pinned.
+
+```sh
+nix run .     # build and run
+nix build .   # -> result/bin/opensidian, with the desktop file installed
+nix develop   # dev shell: rust-analyzer, clippy, rustfmt,
+              # clippy, rustfmt and all native deps; then:
+              #   cd src-tauri && cargo test --locked
+```
+
+On NixOS, the `spawn::tests::switch_alive_probe_reads_proc` test fails:
+it hardcodes `/bin/true`, which does not exist there. The flock/landlock
+integration tests also need a wider sandbox than the Nix build sandbox
+grants, which is why the flake runs `cargo test` from the dev shell and
+not as a flake check.
 
 ## 豆包工作 integration (read-only MCP)
 
