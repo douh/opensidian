@@ -1091,9 +1091,11 @@ THE SOFTWARE.
 ## Plugin-API libraries (vendored, loaded only for community plugins)
 
 These files are unmodified upstream bytes under `ui/vendor/`, served from 'self'
-under the app's CSP and loaded only when a community plugin asks for them
-(`moment`, `loadMathJax`, `loadPdfJs`, `loadPrism`). Versions, publish dates,
-npm integrity and sha256 sums live in each directory's `VENDOR.md` / `SHA256SUMS`.
+under the app's CSP and loaded only when something asks for them: a community
+plugin through the API, or the core reading view for math, Prism and Mermaid
+(`moment`, `loadMathJax`, `loadPdfJs`, `loadPrism`, `loadMermaid`). Versions,
+publish dates, npm integrity and sha256 sums live in each directory's
+`VENDOR.md` / `SHA256SUMS`.
 They carry no SPDX tag of ours: tagging them would modify them, and our GPL tag
 would mislabel them.
 
@@ -1169,6 +1171,38 @@ The vendored files include no NOTICE file.
 **Upstream:** https://mozilla.github.io/pdf.js (npm `pdfjs-dist@6.3.289`)
 **Licence:** Apache-2.0, full text shipped beside the files as `ui/vendor/pdfjs/LICENSE`.
 Apache-2.0 is compatible with GPL-3.0. The vendored files include no NOTICE file.
+
+### Mermaid 11.17.2
+
+**Used in:** `ui/vendor/mermaid/mermaid.min.js` (`loadMermaid`; reading view draws
+` ```mermaid ` fences through it)
+**Upstream:** https://mermaid.js.org (npm `mermaid@11.17.2`)
+**Licence:** MIT. GPL-compatible. Full text: `ui/vendor/mermaid/LICENSE`, reproduced here.
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2014 - 2022 Knut Sveidqvist
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 
 ## glib 0.18.5 (vendored Rust crate, gtk-rs)
 

@@ -2107,9 +2107,152 @@ Ed.lpExt = function (v, G) {
   }
   const lineDeco = new Map();
   const ld = c => { let d = lineDeco.get(c); if (!d) { d = Decoration.line({ class: c }); lineDeco.set(c, d); } return d; };
+
+  /* ---- LP: tables and math are BLOCKS, not rows --------------------------
+     The reading view draws both (main.js wrapTables/typesetMath) while live
+     preview drew table lines as monospace source and `$…$` as text. A table
+     run or a `$$…$$` run is ONE block replace decoration while the selection
+     is OUTSIDE it; touching it (click, caret, IME) puts the source back — the
+     same rule the `.mk` token reveal already follows, so nobody ever edits
+     against invisible text. Inline `$…$` works the same way with an inline
+     widget. Math is the vendored MathJax; before its load lands the source
+     stays and one bust re-runs build. */
+  const TBLROW = /^ {0,3}\|/;
+  const cells = s => {                       // GFM row -> cell strings, `\|` escaped
+    let t = s.trim();
+    if (t.startsWith("|")) t = t.slice(1);
+    if (t.endsWith("|") && !t.endsWith("\\|")) t = t.slice(0, -1);
+    const out = [];
+    let cur = "";
+    for (let i = 0; i < t.length; i++) {
+      if (t[i] === "\\" && t[i + 1] === "|") { cur += "|"; i++; continue; }
+      if (t[i] === "|") { out.push(cur.trim()); cur = ""; continue; }
+      cur += t[i];
+    }
+    out.push(cur.trim());
+    return out;
+  };
+  const isDelim = s => { const c = cells(s); return c.length > 0 && c.every(x => /^:?-+:?$/.test(x)); };
+  const tableAt = (doc, n, hi) => {          // last line of a GFM table starting at n, or 0
+    if (n + 1 > hi || !TBLROW.test(doc.line(n).text) || !isDelim(doc.line(n + 1).text)) return 0;
+    let e = n + 1;
+    while (e + 1 <= hi && TBLROW.test(doc.line(e + 1).text)) e++;
+    return e;
+  };
+  const mathAt = (doc, n, hi) => {           // last line of a `$$…$$` block starting at n, or 0
+    const t = doc.line(n).text.trim();
+    if (!t.startsWith("$$")) return 0;
+    if (t.length > 4 && t.endsWith("$$")) return n;
+    for (let e = n + 1; e <= hi; e++) if (doc.line(e).text.trim().endsWith("$$")) return e;
+    return 0;
+  };
+  const inlineMath = t => {                  // `$…$` ranges; `$$`, `\$` and `code` are not math
+    const out = [];
+    let tick = false;
+    for (let i = 0; i < t.length; i++) {
+      const c = t[i];
+      if (c === "\\") { i++; continue; }
+      if (c === "`") { tick = !tick; continue; }
+      if (tick || c !== "$" || t[i + 1] === "$") continue;
+      let j = i + 1;
+      while (j < t.length && t[j] !== "$" && t[j] !== "`") j++;
+      if (j >= t.length || t[j] !== "$" || j === i + 1) continue;
+      out.push({ s: i, e: j + 1, tex: t.slice(i + 1, j) });
+      i = j;
+    }
+    return out;
+  };
+  const readyMath = () => window.MathJax && typeof window.MathJax.tex2chtml === "function";
+  let asked = false;
+  const wantMath = () => {                   // one load per session; bust redraws when it lands
+    if (asked || readyMath() || !window.__osVendor) return;
+    asked = true;
+    window.__osVendor.loadMathJax().then(() => v.dispatch({ effects: bust.of(null) })).catch(e => console.error("[math]", e));
+  };
+  const mcache = new Map();                  // tex -> CHTML node; clone per widget (build runs per caret move)
+  const texNode = (tex, disp) => {
+    const k = (disp ? "d:" : "i:") + tex;
+    const c = mcache.get(k);
+    if (c) return c.cloneNode(true);
+    try {
+      const n = window.MathJax.tex2chtml(tex, { display: disp });
+      if (mcache.size > 400) mcache.clear();
+      mcache.set(k, n);
+      return n.cloneNode(true);
+    } catch (e) { console.error("[math]", e); return null; }
+  };
+  const caretTo = (line, col) => {           // click a widget -> caret at its source (reveals it)
+    const doc = v.state.doc, n = Math.max(1, Math.min(line, doc.lines));
+    v.dispatch({ selection: { anchor: Math.min(doc.line(n).from + col, doc.line(n).to) }, scrollIntoView: true });
+    v.focus();
+  };
+  class MathW extends WidgetType {
+    constructor(tex, line, col) { super(); this.tex = tex; this.line = line; this.col = col; }
+    eq(o) { return o.tex === this.tex && o.col === this.col; }
+    ignoreEvent() { return true; }
+    toDOM() {
+      const s = document.createElement("span");
+      s.className = "math-inline-w";
+      const n = texNode(this.tex, false);
+      if (n) s.appendChild(n); else s.textContent = "$" + this.tex + "$";
+      s.addEventListener("mousedown", e => { e.preventDefault(); caretTo(this.line, this.col); });
+      return s;
+    }
+  }
+  class BlockW extends WidgetType {
+    constructor(k, t, n) { super(); this.k = k; this.t = t; this.n = n; }
+    eq(o) { return o.k === this.k && o.t === this.t; }
+    get estimatedHeight() { return this.k === "math" ? 56 : Math.min(600, this.t.split("\n").length * 26 + 8); }
+    ignoreEvent() { return true; }
+    toDOM() {
+      const box = document.createElement("div");
+      box.className = this.k === "math" ? "math-block" : "tbl-block";
+      if (this.k === "math") {
+        const tex = this.t.trim().replace(/^\$\$/, "").replace(/\$\$$/, "").trim();
+        const n = readyMath() ? texNode(tex, true) : null;
+        if (n) box.appendChild(n); else box.textContent = this.t;
+      } else {
+        const rows = this.t.split("\n");
+        const al = cells(rows[1] || "").map(a => /^:-+:$/.test(a) ? "center" : /^-+:$/.test(a) ? "right" : /^:-+$/.test(a) ? "left" : "");
+        const tbl = document.createElement("table");
+        tbl.className = "tblgrid";
+        const thead = document.createElement("thead"), htr = document.createElement("tr");
+        cells(rows[0] || "").forEach((c, i) => { const th = document.createElement("th"); th.textContent = c; if (al[i]) th.style.textAlign = al[i]; htr.appendChild(th); });
+        thead.appendChild(htr);
+        tbl.appendChild(thead);
+        const tbody = document.createElement("tbody");
+        for (const r of rows.slice(2)) {
+          const tr = document.createElement("tr");
+          cells(r).forEach((c, i) => { const td = document.createElement("td"); td.textContent = c; if (al[i]) td.style.textAlign = al[i]; tr.appendChild(td); });
+          tbody.appendChild(tr);
+        }
+        tbl.appendChild(tbody);
+        box.appendChild(tbl);
+      }
+      box.addEventListener("mousedown", e => { e.preventDefault(); caretTo(this.n, 0); });
+      return box;
+    }
+  }
+  const blocksFor = (doc, lo, hi, sel) => {   // start line -> {k,n,e,t}; skips runs the caret is in
+    const m = new Map(), to = Math.min(doc.lines, hi + 1);
+    for (let n = Math.max(1, lo - 200); n <= to; n++) {
+      const e = tableAt(doc, n, to) || mathAt(doc, n, to);
+      if (!e) continue;
+      const k = tableAt(doc, n, to) ? "tbl" : "math";
+      const bf = doc.line(n).from, bt = doc.line(e).to;
+      m.set(n, { k, n, e, t: doc.sliceString(bf, bt), live: sel.from <= bt && sel.to >= bf });
+      n = e;
+    }
+    return m;
+  };
+
   const build = view => {
     const g = G(), st = view.state, doc = st.doc, sel = st.selection.main, out = [], labels = [];
     const cur = doc.lineAt(sel.head).number;
+    const vr = view.visibleRanges;
+    const blocks = vr.length
+      ? blocksFor(doc, doc.lineAt(vr[0].from).number, doc.lineAt(vr[vr.length - 1].to).number, sel)
+      : new Map();
     let last = -1;
     for (const { from, to } of view.visibleRanges) {
       let pos = from;
@@ -2118,7 +2261,14 @@ Ed.lpExt = function (v, G) {
         pos = ln.to + 1;
         if (ln.number <= last) continue;
         last = ln.number;
+        const B = blocks.get(ln.number);
+        if (B && !B.live) {                       // draw the block, skip its source lines
+          out.push(Decoration.replace({ widget: new BlockW(B.k, B.t, B.n), block: true }).range(doc.line(B.n).from, doc.line(B.e).to));
+          last = B.e;
+          continue;
+        }
         const P = Ed.lpParse(g, ln.text);
+        const mr = B || !ln.text.includes("$") ? [] : inlineMath(ln.text);
         let rv = null;
         if (sel.from <= ln.to && sel.to >= ln.from) {
           const lo = Math.max(sel.from, ln.from) - ln.from, hi = Math.min(sel.to, ln.to) - ln.from;
@@ -2130,11 +2280,20 @@ Ed.lpExt = function (v, G) {
         }
         const fl = g && g._fl && g._fl.l === ln.number - 1 ? (g._fl.fade ? " navflash fade" : " navflash") : "";
         out.push(ld(P.cls + (ln.number === cur ? " cur" : "") + fl).range(ln.from));
+        const inMath = x => mr.some(r => x.s < r.e && x.e > r.s);
         for (let i = 0; i < P.els.length; i++) {
           const x = P.els[i];
-          if (x.e > x.s) out.push((rv && rv.has(i) ? x.rv : x.d).range(ln.from + x.s, ln.from + x.e));
+          if (x.e > x.s && (!mr.length || !inMath(x))) out.push((rv && rv.has(i) ? x.rv : x.d).range(ln.from + x.s, ln.from + x.e));
         }
-        for (const w of P.wid) out.push(Decoration.widget({ widget: new Leaf(ln.text, w.k, w.el), side: 1 }).range(ln.from + w.pos));
+        if (mr.length && !readyMath()) wantMath();
+        for (const r of mr) {
+          if (sel.from <= ln.from + r.e && sel.to >= ln.from + r.s) continue;   // touched: source stays
+          if (readyMath()) out.push(Decoration.replace({ widget: new MathW(r.tex, ln.number, r.s) }).range(ln.from + r.s, ln.from + r.e));
+        }
+        for (const w of P.wid) {
+          if (mr.length && mr.some(r => w.pos >= r.s && w.pos <= r.e)) continue;
+          out.push(Decoration.widget({ widget: new Leaf(ln.text, w.k, w.el), side: 1 }).range(ln.from + w.pos));
+        }
       }
     }
     if (g && g.view === v && g.lp) {

@@ -458,14 +458,13 @@
     Object.assign(K.exportValues, NEW);
 
     /* ------------------------------------------------------ lib loaders
-       PDF.js, MathJax and Prism are vendored under ui/vendor/<lib>/ (exact pin,
-       sha256 + license in each VENDOR.md / SHA256SUMS) and loaded on first use
-       from 'self' under the unchanged CSP: no network, no eval. Each loader
-       resolves with the real library (also published on window like a plugin
-       expects: pdfjsLib, MathJax, Prism) and rejects honestly when the bytes
-       cannot be loaded; a failed load is retried by the next call. Mermaid is
-       still not vendored: loadMermaid rejects. */
-    const unsupported = what => new Error("unsupported in opensidian: " + what);
+       PDF.js, MathJax, Prism and Mermaid are vendored under ui/vendor/<lib>/
+       (exact pin, sha256 + license in each VENDOR.md / SHA256SUMS) and loaded
+       on first use from 'self' under the unchanged CSP: no network, no eval.
+       Each loader resolves with the real library (also published on window like
+       a plugin expects: pdfjsLib, MathJax, Prism, mermaid) and rejects honestly
+       when the bytes cannot be loaded; a failed load is retried by the next
+       call. */
     const vendorUrl = p => new URL("vendor/" + p, document.baseURI).href;
     const once = {};
     function loadOnce(key, start) {
@@ -529,15 +528,30 @@
       });
     }
 
+    function loadMermaid() {
+      if (window.mermaid && typeof window.mermaid.render === "function") return Promise.resolve(window.mermaid);
+      return loadOnce("mermaid", () => loadScript("mermaid/mermaid.min.js", "Mermaid").then(() => {
+        if (!window.mermaid || typeof window.mermaid.render !== "function") throw new Error("Mermaid loaded without render");
+        // startOnLoad off: the reading view renders the fences it finds, explicitly.
+        // strict: no arbitrary HTML in labels, no link callbacks; diagrams are still
+        // SVG, so nothing here executes script from a note. The theme is read once,
+        // like any other vendored library setting: switching themes redraws on reload.
+        window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict",
+          theme: document.body.classList.contains("theme-light") ? "default" : "dark",
+          fontFamily: "ui-sans-serif, -apple-system, system-ui, sans-serif" });
+        return window.mermaid;
+      }));
+    }
+
     const GATED = {
-      loadMathJax, loadPdfJs, loadPrism, renderMath, finishRenderMath,
-      loadMermaid: () => Promise.reject(unsupported("loadMermaid (Mermaid is not bundled)")),
+      loadMathJax, loadPdfJs, loadPrism, renderMath, finishRenderMath, loadMermaid,
     };
     Object.assign(K.exportValues, GATED);
-    /* The core reading view typesets `$…$` / `$$…$$` with this SAME loader and
-       the same vendored bytes (main.js: typesetMath). api.js deletes
+    /* The core reading view typesets `$…$` / `$$…$$`, highlights fenced code and
+       renders ```mermaid fences with these SAME loaders and the same vendored
+       bytes (main.js: typesetMath/highlightCode/drawMermaid). api.js deletes
        __osApiParts the moment it merges the parts, so this is the only handle
-       core can still read; the loader stays off any other global. */
-    window.__osVendor = Object.assign(window.__osVendor || {}, { loadMathJax });
+       core can still read; the loaders stay off any other global. */
+    window.__osVendor = Object.assign(window.__osVendor || {}, { loadMathJax, loadPrism, loadMermaid });
   });
 })();

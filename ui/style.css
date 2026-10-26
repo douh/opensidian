@@ -1490,12 +1490,30 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
    its columns); math is typeset from the vendored MathJax by main.js, and a
    span that could not be typeset keeps its source text on purpose. */
 .preview .tblwrap { max-width: var(--note-column, none); margin-inline: auto; overflow-x: auto }
-.preview table { border-collapse: collapse; margin-block: var(--p-spacing); font-variant-numeric: tabular-nums }
-.preview th, .preview td { border: 1px solid var(--background-modifier-border); padding: 4px 10px; vertical-align: top }
-.preview th { background: var(--background-primary-alt); font-weight: var(--bold-weight) }
+.tblgrid { border-collapse: collapse; margin-block: 0.5em; font-variant-numeric: tabular-nums }
+.tblgrid th, .tblgrid td { border: 1px solid var(--background-modifier-border); padding: 4px 10px; vertical-align: top }
+.tblgrid th { background: var(--background-primary-alt); font-weight: var(--bold-weight) }
 .preview .math-display { display: block; margin-block: var(--p-spacing); text-align: center }
 .preview .math-inline { display: inline }
-.preview mjx-container { max-width: 100% }
+/* LP block widgets — editor.js BlockW draws the same grid inside the editor,
+   and the math blocks render through the same vendored MathJax. */
+.lp .tbl-block { overflow-x: auto; padding-block: 0.2em }
+.math-block { display: block; margin-block: 0.5em; text-align: center; overflow-x: auto }
+mjx-container { max-width: 100% }
+/* mermaid + prism — the reading view's fenced blocks. Mermaid replaces the
+   whole <pre> (one child per block, so the pvLines map stays aligned); a
+   diagram that fails to parse keeps its source in .bad. Prism token colours
+   come from the theme's own palette, so a light theme needs no second sheet. */
+.preview .mermaid-block { max-width: var(--note-column, none); margin: 0.6em auto; text-align: center; overflow-x: auto }
+.preview .mermaid-block svg { max-width: 100%; height: auto }
+.preview .mermaid-block.bad { text-align: start; font-family: var(--font-monospace); white-space: pre-wrap }
+.preview .token.comment, .preview .token.prolog, .preview .token.cdata, .preview .token.doctype { color: var(--text-faint); font-style: italic }
+.preview .token.punctuation, .preview .token.operator { color: var(--text-muted) }
+.preview .token.keyword, .preview .token.atrule, .preview .token.rule, .preview .token.important { color: var(--text-accent) }
+.preview .token.string, .preview .token.char, .preview .token.attr-value, .preview .token.regex { color: var(--color-green, #a6e3a1) }
+.preview .token.number, .preview .token.boolean, .preview .token.constant { color: var(--text-error) }
+.preview .token.function, .preview .token.class-name { color: var(--color-yellow, #f9e2af) }
+.preview .token.tag, .preview .token.property, .preview .token.selector, .preview .token.attr-name, .preview .token.builtin { color: var(--color-blue, #89b4fa) }
 /* goal/listlinks — reading view list/link geometry
    (docs/listlinks/recon.md REQ-n). .preview only; live preview untouched. */
 .preview ul > li::before { inset-inline-start: calc(-12.8px - var(--list-bullet-size) / 2) }   /* REQ-1: dot centre = text x - 12.8 */

@@ -6534,11 +6534,16 @@ const pvTouched = (P, recs) => recs.some(r => r.target !== P || r.type !== "attr
    leaves the plain span — honest source, never an empty box. */
 function wrapTables(P) {
   for (const t of P.querySelectorAll("table")) {
+    t.classList.add("tblgrid");            // same grid rules the LP block widget uses
     const w = document.createElement("div");
     w.className = "tblwrap";
     t.replaceWith(w);
     w.appendChild(t);
   }
+}
+
+function pvSettled(P, src) {              // our own async writes are not a user edit
+  if (P._pvObs && P._pvk && P._pvk.src === src) { P._pvObs.takeRecords(); P._pvDirty = false; }
 }
 
 function typesetMath(P, src) {
@@ -6556,10 +6561,62 @@ function typesetMath(P, src) {
     // async (first load) only: these writes are ours, not a user edit, so the
     // retained reading DOM must not look dirty — but only while this render
     // still owns the pane, or a newer note would inherit the clean flag.
-    if (P._pvObs && P._pvk && P._pvk.src === src) { P._pvObs.takeRecords(); P._pvDirty = false; }
+    pvSettled(P, src);
   };
   if (window.MathJax && typeof window.MathJax.tex2chtml === "function") batch(window.MathJax);
   else V.loadMathJax().then(batch).catch(e => console.error("[math]", e));
+}
+
+/* highlightCode + drawMermaid — the two other block renderings the reading
+   view owed. Prism is loaded in manual mode, so nothing sweeps the app; only
+   fenced blocks whose language has a BUNDLED grammar are highlighted (markup,
+   css, clike, javascript) — an unbundled language keeps plain text rather than
+   guessing. Mermaid fences become inline SVG from the vendored build with
+   securityLevel strict; a diagram that fails to parse shows its source, never
+   an empty box. */
+function highlightCode(P, src) {
+  const cs = P.querySelectorAll("pre > code[class*='language-']");
+  if (!cs.length) return;
+  const V = window.__osVendor;
+  if (!V) return;
+  V.loadPrism().then(Prism => {
+    let n = 0;
+    for (const c of cs) {
+      if (!c.isConnected) continue;
+      const m = /language-([\w+#-]+)/.exec(c.className);
+      if (!m || !Prism.languages[m[1]]) continue;
+      try { Prism.highlightElement(c); n++; } catch (e) { console.error("[prism]", e); }
+    }
+    if (n) pvSettled(P, src);
+  }).catch(e => console.error("[prism]", e));
+}
+
+let mseq = 0;
+function drawMermaid(P, src) {
+  const cs = P.querySelectorAll("pre > code.language-mermaid");
+  if (!cs.length) return;
+  const V = window.__osVendor;
+  if (!V) return;
+  V.loadMermaid().then(async m => {
+    let n = 0;
+    for (const c of cs) {
+      if (!c.isConnected) continue;
+      const text = c.textContent, box = document.createElement("div"), id = "mmd-" + (++mseq);
+      box.className = "mermaid-block";
+      try {
+        box.innerHTML = (await m.render(id, text)).svg;      // Mermaid's own sanitised SVG
+      } catch (e) {
+        console.error("[mermaid]", e);
+        const junk = document.getElementById("d" + id);       // Mermaid leaves its scratch node behind on error
+        if (junk) junk.remove();
+        box.classList.add("bad");
+        box.textContent = text;
+      }
+      const pre = c.closest("pre");
+      if (pre && pre.isConnected) { pre.replaceWith(box); n++; }
+    }
+    if (n) pvSettled(P, src);
+  }).catch(e => console.error("[mermaid]", e));
 }
 
 async function preview(g, sw) {   // sw: called by setMode (the edit -> reading switch)
@@ -6617,6 +6674,8 @@ async function preview(g, sw) {   // sw: called by setMode (the edit -> reading 
   cvEmbedFill(g.preview);                    // cv-vault CV-139: ![[X.canvas]] -> span.cv-embed (before the a.wiki wiring below)
   wrapTables(g.preview);
   typesetMath(g.preview, src);
+  highlightCode(g.preview, src);
+  drawMermaid(g.preview, src);
   mswpMark("html");
   g.pvLines = pvL;
   mswpMark("blines");
