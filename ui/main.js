@@ -14,6 +14,14 @@ const PLG = window.__osPluginHost && __osPluginHost.app && __osPluginHost.api ? 
 // the app's own note writes reach the plugin vault through this (api-vault host.noteWritten), captured before the seal
 const PLGNW = window.__osPluginHost && typeof __osPluginHost.noteWritten === "function" ? __osPluginHost.noteWritten : null;
 const inv = (c, a) => { const x = otel.ctx(); return TAURI.core.invoke(c, x ? Object.assign({ otel: x }, a) : a); };
+/* macOS draws its own frame (tauri.macos.conf.json: decorations + overlay title
+   bar), so ui/style.css swaps the self-drawn window strip for the native traffic
+   lights when this class is set. The flag is injected by main.rs host_js before
+   any page script runs; the UA check is the fallback if that script is ever
+   missing (the Linux build answers "linux" and keeps the old chrome). */
+const HOSTOS = (globalThis.__opensidianHost && globalThis.__opensidianHost.os) ||
+  (/Mac/i.test(navigator.platform || navigator.userAgent) ? "darwin" : "linux");
+if (HOSTOS === "darwin") document.body.classList.add("mac");
 /* perf-spans shim over otel: mark(name, t0, extra) = a span that started at
    t0 and ends now; push(name, ms, extra) = an already-measured span (graph
    frames); both no-ops once the backend said telemetry is off. */

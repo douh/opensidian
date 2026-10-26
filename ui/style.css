@@ -1669,6 +1669,19 @@ body.floorrelayout #main { padding-right: 1px }
    fuzz PASSES 352 assertions over 44 sizes x 8 states, [ovf:0,0,0] everywhere. */
 #rtabs.wfinset { padding-right: min(140px, calc(100% - 6px)); flex-wrap: nowrap; min-width: 0 }   /* nowrap: wrapping would DOUBLE the row height instead of clipping (R22) */
 .tabbar.wfinset { padding-right: min(140px, 100%); min-width: 0 }
+/* ---------- macOS: the window frame is the system's again ----------
+   tauri.macos.conf.json re-enables decorations with the overlay title bar, so
+   close / minimise / zoom are real traffic lights at the top-left and the page
+   runs under them. The self-drawn #wframe buttons and the #wrz resize strips
+   duplicate (and would fight) the native ones, so they are hidden here rather
+   than removed: the Linux build still needs both. The chrome sits below a 28px
+   band, because the lights hang over the window's top-left corner and the ribbon
+   (full-height, at x=0) would otherwise put its first button underneath them.
+   With no strip covering the right corner any more, the .wfinset right
+   reservation goes back to zero instead of leaving a dead gap. */
+body.mac #wframe, body.mac #wrz { display: none }
+body.mac .app-container { padding-top: 28px }
+body.mac #rtabs.wfinset, body.mac .tabbar.wfinset { padding-right: 0; min-width: 0 }
 /* R33.3 resize: eight invisible grips. The layer is pointer-events:none so only
    the grips themselves take a press; they paint nothing, so no screenshot
    baseline and no pixel probe moves. The north grip stops at the control strip

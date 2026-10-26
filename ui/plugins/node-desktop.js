@@ -551,9 +551,17 @@
          extent only (no async-context propagation in the page); getStore() is undefined
          elsewhere, which callers already handle (?? default). */
   const OS_HOME = "/home/opensidian";
+  /* the host this port runs on, injected by the Rust side before any page script
+     (main.rs host_js). These four strings used to be a fixed "linux"/"x64" on every
+     build, so a plugin's platform branch took the Linux path on macOS. The values
+     stay deliberately vague — no hostname, NIC, kernel or version, which is why
+     os.Release/networkInterfaces below are still constants. */
+  const HOST = globalThis.__opensidianHost ||
+    (/Mac/i.test(navigator.userAgent || "") ? { os: "darwin", type: "Darwin", arch: "arm64", machine: "arm64" }
+                                            : { os: "linux", type: "Linux", arch: "x64", machine: "x86_64" });
   const osOwn = Object.freeze({
     homedir: () => OS_HOME, tmpdir: () => "/tmp", hostname: () => "localhost",
-    platform: () => "linux", type: () => "Linux", arch: () => "x64", machine: () => "x86_64",
+    platform: () => HOST.os, type: () => HOST.type, arch: () => HOST.arch, machine: () => HOST.machine,
     release: () => "0.0.0", version: () => "", endianness: () => "LE", EOL: "\n", devNull: "/dev/null",
     userInfo: () => ({ uid: -1, gid: -1, username: "opensidian", homedir: OS_HOME, shell: null }),
     networkInterfaces: () => ({}), cpus: () => [], availableParallelism: () => 1,
@@ -598,7 +606,7 @@
     const self = Object.create(null);
     const noop = () => self;
     return Object.freeze(Object.assign(self, {
-      platform: "linux", arch: "x64", browser: false, pid: 0,
+      platform: HOST.os, arch: HOST.arch, browser: false, pid: 0,
       env: Object.freeze(Object.create(null)),
       version: "v18.0.0",
       versions: Object.freeze(Object.assign(Object.create(null), { node: "18.0.0" })),
