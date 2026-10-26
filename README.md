@@ -139,6 +139,31 @@ hop). curl does not read the macOS network settings by itself, so when neither a
 is read from `scutil --proxy` and passed as `--proxy` — a launch from Finder on a
 proxied network therefore reaches GitHub the same way the browser does.
 
+## 豆包工作 integration (read-only MCP)
+
+豆包工作 (Doubao Work) takes external data as custom plugins over MCP, and its
+local transport is STDIO. The bundle ships `Contents/MacOS/opensidian-mcp`, a
+small read-only MCP server over one vault:
+
+1. 插件 → **+ 添加** → 新建自定义插件, 服务器名称 `Opensidian`, 传输类型 **STDIO**.
+2. 运行命令: `/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp`.
+3. 参数: the absolute vault path, e.g. `/Users/you/Notes` (or leave the argument
+   out and set `OPENSIDIAN_VAULT` in the environment instead).
+4. 保存, then call it from a task (`/` or `@` to pick the plugin).
+
+Tools: `list_notes` (relative paths, optional `folder`/`limit`), `read_note`
+(UTF-8 text, truncated at 200 KB by default and marked as such), and
+`search_notes` (case-insensitive substring, answering file + line + the matching
+line). Nothing writes: it is a reader, `.obsidian/`, `.git/`, `.trash/` and
+`node_modules/` are never listed or searched, and a path that escapes the vault
+is refused.
+
+The helper is deliberately outside the App Sandbox: 豆包工作 starts it, it
+inherits nothing from the app, and it must be able to read the folder you name.
+It runs with your user's rights, like any local MCP server, and only reads.
+`make-app.sh` signs it before the app and without entitlements for exactly that
+reason.
+
 ## Licence
 GPL-3.0-or-later ([LICENSE](LICENSE)). Read [THIRD-PARTY.md](THIRD-PARTY.md) before redistributing.
 

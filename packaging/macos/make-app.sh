@@ -21,6 +21,9 @@ set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 bin="$root/src-tauri/target/release/opensidian"
+# the read-only MCP server 豆包工作 launches (see src/bin/opensidian-mcp.rs);
+# a separate file because it must NOT carry the app's sandbox entitlement
+mcp="$root/src-tauri/target/release/opensidian-mcp"
 out="$root/src-tauri/target/macos/Opensidian.app"
 icons="$root/packaging/linux/icons"
 version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/src-tauri/tauri.conf.json" | head -1)
@@ -31,11 +34,13 @@ if [ "${OPENSIDIAN_SKIP_BUILD:-}" != 1 ]; then
     (cd "$root/src-tauri" && cargo build --release --locked)
 fi
 [ -x "$bin" ] || { echo "missing $bin (run without OPENSIDIAN_SKIP_BUILD)" >&2; exit 1; }
+[ -x "$mcp" ] || { echo "missing $mcp (run without OPENSIDIAN_SKIP_BUILD)" >&2; exit 1; }
 
 echo "==> assembling $out"
 rm -rf "$out"
 mkdir -p "$out/Contents/MacOS" "$out/Contents/Resources"
 cp "$bin" "$out/Contents/MacOS/opensidian"
+cp "$mcp" "$out/Contents/MacOS/opensidian-mcp"
 printf 'APPL????' > "$out/Contents/PkgInfo"
 
 # .icns from the Linux icon set. 512px is the largest upstream render; the
@@ -102,6 +107,11 @@ PLIST
 # folder is reachable only through the folder panel's grant (sandbox_mac.rs).
 # It is NOT a distribution signature — see the header.
 ent="$root/packaging/macos/Opensidian.entitlements"
+# the MCP helper is signed FIRST and WITHOUT the entitlements: 豆包工作 starts
+# it directly, it inherits nothing from us, and it must be able to read the
+# vault folder it is given. Signing it inside the app afterwards would seal it
+# with sandbox entitlements and it could no longer open the vault.
+codesign --force --sign - "$out/Contents/MacOS/opensidian-mcp" >/dev/null 2>&1 || echo "warning: ad-hoc codesign of opensidian-mcp failed" >&2
 codesign --force --sign - --entitlements "$ent" "$out" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed; launch may be refused on arm64" >&2
 
 echo "==> $out ($version)"

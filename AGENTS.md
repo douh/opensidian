@@ -71,6 +71,10 @@ cannot; `flock(1)` is not used at all — contention tests fork and take
     processes, so writes go through cfgstore.
   - `src/sandbox.rs`: optional Landlock self-sandbox (`OPENSIDIAN_LANDLOCK=1`);
     `src/sandbox_mac.rs` (macOS-only): App Sandbox folder panel and bookmarks.
+  - `src/bin/opensidian-mcp.rs`: the read-only MCP (stdio) server 豆包工作
+    launches. It must stay OUT of the App Sandbox — make-app.sh signs it before
+    the app, without entitlements, or it could not read the vault it is given.
+    No writes: keep it a reader (list/read/search), never a second writer.
   - `src/themefs.rs`, `src/builtins.rs`: themes and CSS snippets are files in
     the vault. The bundled community themes in `themes/` are vendored
     **byte-exact** and pinned by sha256 in builtins.rs. Never edit them.
