@@ -11301,17 +11301,23 @@ function sCheckUpdates(d) {
   if (!info) return;
   let out = info.querySelector(".supd");
   if (!out) { out = document.createElement("div"); out.className = "sdesc supd"; info.appendChild(out); }
-  out.textContent = "Checking GitHub for a signed release…";
+  out.textContent = "Checking douh/opensidian for a release…";
   sUpdBusy = true; sUpd = { status: "checking", latest: "" }; updateTitle();
   inv("update_check").then(res => {
     sUpd = { status: String(res.status), latest: String(res.latest || "") };
-    out.textContent = String(res.text);
     out.dataset.status = sUpd.status;
     if (res.status === "available" && res.url) {
+      // R14: compare done in Rust (local current vs release); we only ask.
+      out.textContent = String(res.text).replace(/[.\s]+$/, "") + " — install it?";
       const a = document.createElement("span"); a.className = "slink supdlink"; a.tabIndex = 0;
-      a.textContent = " View release";
+      a.textContent = " Download";
       a.onclick = ev => { ev.stopPropagation(); sOpenExt(String(res.url)); };
-      out.appendChild(a);
+      const later = document.createElement("span"); later.className = "slink supdlink"; later.tabIndex = 0;
+      later.textContent = " Later";
+      later.onclick = ev => { ev.stopPropagation(); out.textContent = "Kept local " + (res.current || "") + "."; };
+      out.append(a, later);
+    } else {
+      out.textContent = String(res.text);
     }
   }).catch(err => {
     sUpd = { status: "error", latest: "" };

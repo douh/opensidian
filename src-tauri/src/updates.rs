@@ -36,8 +36,22 @@ use crate::plugin_store::{self, Fetch};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256, Sha512};
 
-pub const REPO: &str = "jpzk/opensidian";
-const RELEASES_URL: &str = "https://api.github.com/repos/jpzk/opensidian/releases?per_page=30";
+/// This tree is the douh fork: releases are published there, not upstream.
+pub const REPO: &str = "douh/opensidian";
+/// How releases are trusted. Upstream signs every release with the key pinned
+/// below; a fork build cannot (the private key is not ours), so it ACCEPTS an
+/// unsigned release and says so in every result instead of staying silent.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Policy {
+    Signed,
+    UnsignedFork,
+}
+/// the policy compiled into this binary
+pub const POLICY: Policy = Policy::UnsignedFork;
+
+fn releases_url() -> String {
+    format!("https://api.github.com/repos/{REPO}/releases?per_page=30")
+}
 /// the release-signing key, ed25519, embedded at build time
 pub const PINNED_KEY_ASC: &str = include_str!("../data/updates/opensidian-release.pub.asc");
 /// its full v4 fingerprint; the embedded key is refused unless it hashes to this
@@ -427,23 +441,41 @@ pub fn release_page(tag: &str) -> String {
 
 /// the whole check; Err only for "could not ask GitHub at all"
 pub fn check(fetch: Fetch, current: &str) -> Result<Value, String> {
-    let list = fetch(RELEASES_URL, MAX_RELEASES_JSON, "releases")?;
+    check_with(POLICY, fetch, current)
+}
+
+fn check_with(policy: Policy, fetch: Fetch, current: &str) -> Result<Value, String> {
+    let list = fetch(&releases_url(), MAX_RELEASES_JSON, "releases")?;
     let Some(c) = pick_latest(&list)? else {
-        return Ok(json!({"status": "current", "current": current, "text": format!("Opensidian is up to date ({current}); no published release found.")}));
+        return Ok(json!({"status": "current", "current": current, "latest": "",
+                       "text": format!("Opensidian is up to date (local {current}); {REPO} has no published release.")}));
     };
-    let sig = signed(fetch, &c);
     let newer = plugin_store::version_gt(&c.version, current);
     let signer = short_fpr();
+    // A fork build cannot be signed with the upstream key, so it states that
+    // plainly instead of refusing every release it publishes.
+    if policy == Policy::UnsignedFork {
+        let why = "fork build — release is not signature-checked";
+        return Ok(if newer {
+            json!({"status": "available", "current": current, "latest": c.version, "signed": false,
+                   "url": release_page(&c.tag),
+                   "text": format!("Opensidian {} is newer than your local {current} ({why})", c.version)})
+        } else {
+            json!({"status": "current", "current": current, "latest": c.version, "signed": false,
+                   "text": format!("Your local {current} is up to date; latest release is {} ({why})", c.version)})
+        });
+    }
+    let sig = signed(fetch, &c);
     Ok(match (sig, newer) {
         (Err(e), _) => {
             eprintln!("[updates] {} rejected: {e}", c.tag);
-            json!({"status": "unsigned", "current": current, "latest": c.version, "reason": e,
+            json!({"status": "unsigned", "current": current, "latest": c.version, "reason": e, "signed": false,
                    "text": format!("Latest release {} is NOT signed (or signature invalid) — ignored.", c.version)})
         }
-        (Ok(()), true) => json!({"status": "available", "current": current, "latest": c.version, "signer": signer,
+        (Ok(()), true) => json!({"status": "available", "current": current, "latest": c.version, "signer": signer, "signed": true,
                    "url": release_page(&c.tag),
                    "text": format!("Opensidian {} is available — signed by {signer}", c.version)}),
-        (Ok(()), false) => json!({"status": "current", "current": current, "latest": c.version, "signer": signer,
+        (Ok(()), false) => json!({"status": "current", "current": current, "latest": c.version, "signer": signer, "signed": true,
                    "text": format!("Opensidian is up to date ({current}). Latest release {} is signed by {signer}.", c.version)}),
     })
 }
@@ -549,7 +581,7 @@ mod tests {
     fn gh(list: Value, asc: &'static [u8], sums: &'static [u8]) -> impl Fn(&str, u64, &str) -> Result<Vec<u8>, String> {
         move |u: &str, cap: u64, _: &str| {
             plugin_store::check_url(u)?;
-            let b: Vec<u8> = if u == RELEASES_URL {
+            let b: Vec<u8> = if u == releases_url() {
                 list.to_string().into_bytes()
             } else if u.ends_with("/SHA256SUMS") {
                 sums.to_vec()
@@ -566,22 +598,43 @@ mod tests {
     #[test]
     fn check_reports_available_current_and_unsigned() {
         let l = json!([rel("v0.6.1", false, false, true, true), rel("v0.4", false, false, true, true)]);
-        let r = check(&gh(l.clone(), ASC, SUMS), "0.6.0").unwrap();
+        let r = check_with(Policy::Signed, &gh(l.clone(), ASC, SUMS), "0.6.0").unwrap();
         assert_eq!(r["status"], "available");
         assert_eq!(r["text"], "Opensidian 0.6.1 is available — signed by A6E6…4EA3");
-        assert_eq!(r["url"], "https://github.com/jpzk/opensidian/releases/tag/v0.6.1");
-        let r = check(&gh(l.clone(), ASC, SUMS), "0.7.0").unwrap();
+        assert_eq!(r["url"], "https://github.com/douh/opensidian/releases/tag/v0.6.1");
+        let r = check_with(Policy::Signed, &gh(l.clone(), ASC, SUMS), "0.7.0").unwrap();
         assert_eq!(r["status"], "current");
         assert!(r["text"].as_str().unwrap().starts_with("Opensidian is up to date (0.7.0)"));
         for (asc, sums) in [(WRONG, SUMS), (ASC, b"00  opensidian-0.6.1-x\n" as &[u8])] {
-            let r = check(&gh(l.clone(), asc, sums), "0.6.0").unwrap();
+            let r = check_with(Policy::Signed, &gh(l.clone(), asc, sums), "0.6.0").unwrap();
             assert_eq!(r["status"], "unsigned", "{r}");
             assert_eq!(r["text"], "Latest release 0.6.1 is NOT signed (or signature invalid) — ignored.");
             assert!(r.get("url").is_none(), "an unsigned release is never offered");
         }
         let nosig = json!([rel("v0.6.1", false, false, true, false)]);
-        assert_eq!(check(&gh(nosig, ASC, SUMS), "0.6.0").unwrap()["status"], "unsigned");
+        assert_eq!(check_with(Policy::Signed, &gh(nosig, ASC, SUMS), "0.6.0").unwrap()["status"], "unsigned");
         let down = |_: &str, _: u64, _: &str| -> Result<Vec<u8>, String> { Err("releases: api.github.com — no route".into()) };
         assert!(check(&down, "0.7.0").unwrap_err().contains("no route"));
+    }
+
+    #[test]
+    fn fork_policy_offers_unsigned_releases_without_fetching_a_signature() {
+        let l = json!([rel("v0.9.0", false, false, true, true)]);
+        let f = |u: &str, _: u64, _: &str| -> Result<Vec<u8>, String> {
+            assert!(!u.ends_with("/SHA256SUMS") && !u.ends_with("/SHA256SUMS.asc"), "fork policy must not fetch signatures: {u}");
+            Ok(l.to_string().into_bytes())
+        };
+        let r = check_with(Policy::UnsignedFork, &f, "0.8.1").unwrap();
+        assert_eq!(r["status"], "available", "{r}");
+        assert_eq!(r["signed"], false);
+        assert_eq!(r["latest"], "0.9.0");
+        assert_eq!(r["url"], "https://github.com/douh/opensidian/releases/tag/v0.9.0");
+        assert!(r["text"].as_str().unwrap().contains("newer than your local 0.8.1"), "{r}");
+        assert_eq!(check_with(Policy::UnsignedFork, &f, "0.9.0").unwrap()["status"], "current");
+        let empty = json!([]);
+        let none = |_: &str, _: u64, _: &str| -> Result<Vec<u8>, String> { Ok(empty.to_string().into_bytes()) };
+        let r = check_with(Policy::UnsignedFork, &none, "0.8.1").unwrap();
+        assert_eq!(r["status"], "current");
+        assert!(r["text"].as_str().unwrap().contains("douh/opensidian has no published release"), "{r}");
     }
 }
