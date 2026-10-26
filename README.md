@@ -181,18 +181,35 @@ integration tests also need a wider sandbox than the Nix build sandbox
 grants, which is why the flake runs `cargo test` from the dev shell and
 not as a flake check.
 
-## 豆包工作 integration (read-only MCP)
+## MCP server (read-only)
 
-豆包工作 (Doubao Work) takes external data as custom connectors over MCP, and
-its local transport is STDIO. The bundle ships `Contents/MacOS/opensidian-mcp`,
-a small read-only MCP server over one vault:
+The bundle ships `Contents/MacOS/opensidian-mcp`: a small read-only
+[Model Context Protocol](https://modelcontextprotocol.io) server over one vault,
+for any local MCP client (Claude Desktop, Cursor, a script of your own). It
+speaks MCP over stdio — one JSON-RPC message per line, no HTTP — so
+every client is configured with the same two values:
 
-1. 连接器 → **新建连接器** (older builds label this 插件 → **+ 添加** →
-   新建自定义插件), 名称 `Opensidian`, 传输类型 **STDIO**.
-2. 运行命令: `/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp`.
-3. 参数: the absolute vault path, e.g. `/Users/you/Notes` (or leave the argument
-   out and set `OPENSIDIAN_VAULT` in the environment instead).
-4. 保存, then call it from a task (`/` or `@` to pick the connector).
+- command: `/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp`
+- args: the absolute vault path, e.g. `/Users/you/Notes` (or pass no argument and
+  set `OPENSIDIAN_VAULT` in the environment instead)
+
+Clients with a JSON config take an `mcpServers` entry:
+
+```json
+{
+  "mcpServers": {
+    "opensidian": {
+      "command": "/Applications/Opensidian.app/Contents/MacOS/opensidian-mcp",
+      "args": ["/Users/you/Notes"]
+    }
+  }
+}
+```
+
+A client that only offers form fields wants the same three things: transport
+**stdio** (not HTTP), the command above, and the vault path as its argument.
+Reconnect or restart the client after adding it. On Linux the server is the
+second binary of the same build (`target/release/opensidian-mcp`).
 
 Tools: `list_notes` (relative paths, optional `folder`/`limit`), `read_note`
 (UTF-8 text, truncated at 200 KB by default and marked as such), and
@@ -201,7 +218,7 @@ line). Nothing writes: it is a reader, `.obsidian/`, `.git/`, `.trash/` and
 `node_modules/` are never listed or searched, and a path that escapes the vault
 is refused.
 
-The helper is deliberately outside the App Sandbox: 豆包工作 starts it, it
+The helper is deliberately outside the App Sandbox: the MCP client starts it, it
 inherits nothing from the app, and it must be able to read the folder you name.
 It runs with your user's rights, like any local MCP server, and only reads.
 `make-app.sh` signs it before the app and without entitlements for exactly that

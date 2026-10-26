@@ -21,7 +21,7 @@ set -eu
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 bin="$root/src-tauri/target/release/opensidian"
-# the read-only MCP server 豆包工作 launches (see src/bin/opensidian-mcp.rs);
+# the read-only MCP server an external MCP client launches (src/bin/opensidian-mcp.rs);
 # a separate file because it must NOT carry the app's sandbox entitlement
 mcp="$root/src-tauri/target/release/opensidian-mcp"
 out="$root/src-tauri/target/macos/Opensidian.app"
@@ -107,8 +107,8 @@ PLIST
 # folder is reachable only through the folder panel's grant (sandbox_mac.rs).
 # It is NOT a distribution signature — see the header.
 ent="$root/packaging/macos/Opensidian.entitlements"
-# the MCP helper is signed FIRST and WITHOUT the entitlements: 豆包工作 starts
-# it directly, it inherits nothing from us, and it must be able to read the
+# the MCP helper is signed FIRST and WITHOUT the entitlements: an MCP client
+# starts it directly, it inherits nothing from us, and it must be able to read the
 # vault folder it is given. Signing it inside the app afterwards would seal it
 # with sandbox entitlements and it could no longer open the vault.
 codesign --force --sign - "$out/Contents/MacOS/opensidian-mcp" >/dev/null 2>&1 || echo "warning: ad-hoc codesign of opensidian-mcp failed" >&2

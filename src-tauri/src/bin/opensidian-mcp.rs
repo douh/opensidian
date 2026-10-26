@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-/* opensidian-mcp — a read-only MCP (stdio) server over a vault, so 豆包工作
-   ("Doubao Work") can search and read the notes while the app stays the place
-   where they are edited.
+/* opensidian-mcp — a read-only MCP (stdio) server over one vault, so a local MCP
+   client (Claude Desktop, Cursor, a script of your own) can search and read the
+   notes while the app stays the place where they are edited.
 
-   Why a separate executable rather than a mode of the app: 豆包工作 plugs a
-   local program in as "STDIO", giving it a command and arguments. That child
-   is launched by 豆包工作, not by us, so it inherits nothing from the app —
+   Why a separate executable rather than a mode of the app: an MCP client starts
+   local servers itself, from the command line it was configured with. That child
+   is launched by the client, not by us, so it inherits nothing from the app —
    in particular it cannot use the App Sandbox's folder grant, which is a
    bookmark the GUI process resolved. A second binary is also the only way to
    have a different signature: the app carries com.apple.security.app-sandbox,
@@ -14,7 +14,7 @@
    runs with your user's rights, over one folder you point it at.
 
    READ-ONLY by design (first version): list_notes, read_note, search_notes.
-   Nothing here writes into the vault, so 豆包工作 cannot corrupt a note or
+   Nothing here writes into the vault, so the client cannot corrupt a note or
    race the app's editor/watcher. Tools that write come after this is proven.
 
    Wire format: MCP stdio = one JSON-RPC 2.0 message per line on stdin, one
@@ -22,7 +22,7 @@
    framing, no HTTP.
 
    Usage:
-     opensidian-mcp <vault>          what 豆包工作's 参数 field holds
+     opensidian-mcp <vault>          positional argument, as clients pass "args"
      opensidian-mcp --vault <vault>  same, spelled out
      OPENSIDIAN_VAULT=<vault>        fallback when no argument is given */
 
