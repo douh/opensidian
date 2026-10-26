@@ -35,6 +35,8 @@
 use crate::plugin_store::{self, Fetch};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256, Sha512};
+use std::fs;
+use std::path::{Path, PathBuf};
 
 /// This tree is the douh fork: releases are published there, not upstream.
 pub const REPO: &str = "douh/opensidian";
@@ -487,6 +489,52 @@ pub async fn update_check() -> Result<Value, String> {
         .map_err(|e| format!("update check: {e}"))?
 }
 
+/// a build sitting in the local folder the user picked
+pub struct LocalBuild {
+    pub version: String,
+    pub path: PathBuf,
+}
+
+/// newest `Opensidian.app` / `Opensidian-<version>-*.dmg` directly inside `dir`.
+/// The app bundle wins ties because it is what `make-app.sh` actually produces;
+/// a DMG is only read from its file name, never mounted.
+pub fn scan_dir(dir: &Path) -> Option<LocalBuild> {
+    let mut best: Option<LocalBuild> = None;
+    let mut take = |version: String, path: PathBuf| {
+        let newer = best.as_ref().map(|b| plugin_store::version_gt(&version, &b.version)).unwrap_or(true);
+        if newer {
+            best = Some(LocalBuild { version, path });
+        }
+    };
+    let app = dir.join("Opensidian.app");
+    if let Ok(xml) = fs::read_to_string(app.join("Contents/Info.plist")) {
+        if let Some(v) = plist_version(&xml) {
+            take(v, app);
+        }
+    }
+    for e in fs::read_dir(dir).ok()?.flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        let Some(rest) = name.strip_prefix("Opensidian-") else { continue };
+        let Some(stem) = rest.strip_suffix(".dmg") else { continue };
+        let Some(ver) = stem.split('-').next() else { continue };
+        if ver.is_empty() || !ver.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            continue;
+        }
+        take(ver.to_string(), e.path());
+    }
+    best
+}
+
+/// CFBundleShortVersionString out of an XML Info.plist (never ABM/binary).
+pub fn plist_version(xml: &str) -> Option<String> {
+    let at = xml.find("<key>CFBundleShortVersionString</key>")? + "<key>CFBundleShortVersionString</key>".len();
+    let rest = &xml[at..];
+    let open = rest.find("<string>")? + "<string>".len();
+    let close = rest[open..].find("</string>")?;
+    let v = rest[open..open + close].trim();
+    (!v.is_empty()).then(|| v.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -636,5 +684,37 @@ mod tests {
         let r = check_with(Policy::UnsignedFork, &none, "0.8.1").unwrap();
         assert_eq!(r["status"], "current");
         assert!(r["text"].as_str().unwrap().contains("douh/opensidian has no published release"), "{r}");
+    }
+
+    #[test]
+    fn local_scan_picks_the_newest_build_and_ignores_junk() {
+        let dir = std::env::temp_dir().join(format!("os-upd-scan-{}", std::process::id()));
+        let app = dir.join("Opensidian.app/Contents");
+        fs::create_dir_all(&app).unwrap();
+        fs::write(app.join("Info.plist"),
+                  "<plist><dict><key>CFBundleShortVersionString</key><string>0.8.1</string></dict></plist>").unwrap();
+        fs::write(dir.join("Opensidian-0.9.0-macos-arm64.dmg"), b"x").unwrap();
+        fs::write(dir.join("Opensidian-notes.dmg"), b"x").unwrap();
+        fs::write(dir.join("other-1.0.0.dmg"), b"x").unwrap();
+        let b = scan_dir(&dir).unwrap();
+        assert_eq!(b.version, "0.9.0");
+        assert_eq!(b.path, dir.join("Opensidian-0.9.0-macos-arm64.dmg"));
+        fs::remove_file(dir.join("Opensidian-0.9.0-macos-arm64.dmg")).unwrap();
+        let b = scan_dir(&dir).unwrap();
+        assert_eq!(b.version, "0.8.1");
+        assert_eq!(b.path, dir.join("Opensidian.app"));
+        let empty = dir.join("empty");
+        fs::create_dir_all(&empty).unwrap();
+        assert!(scan_dir(&empty).is_none(), "an empty folder offers nothing");
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn plist_version_reads_only_the_bundle_version() {
+        let xml = "<plist><dict><key>CFBundleVersion</key><string>99</string>
+            <key>CFBundleShortVersionString</key>\n\t<string>1.2.3</string></dict></plist>";
+        assert_eq!(plist_version(xml).unwrap(), "1.2.3");
+        assert!(plist_version("<plist><dict/></plist>").is_none());
+        assert!(plist_version("<plist><dict><key>CFBundleShortVersionString</key><string></string></dict></plist>").is_none());
     }
 }

@@ -1534,6 +1534,72 @@ fn boot_sandbox_gate(_init: &mut Option<PathBuf>) -> Option<PathBuf> {
     None
 }
 
+/// the folder holding local builds also stores its grant in the vault bookmark
+/// map (sandbox: path is not permission, the bookmark is)
+/// remember the folder the user just picked in the panel
+#[tauri::command]
+fn update_local_dir(path: String) -> serde_json::Value {
+    let p = PathBuf::from(&path);
+    if !p.is_dir() {
+        return serde_json::json!({"ok": false, "error": format!("{path} is not a folder")});
+    }
+    #[cfg(target_os = "macos")]
+    remember_vault_access(&p);
+    cfg_set("update_local_dir", serde_json::json!(path));
+    serde_json::json!({"ok": true, "dir": path})
+}
+
+/// scan the local folder for a build and compare it with the version we run.
+/// Without a folder (or without a usable grant) it says so instead of guessing.
+#[tauri::command]
+fn update_local_check() -> serde_json::Value {
+    let cfg = cfg_value();
+    let Some(dir) = cfg["update_local_dir"].as_str().map(str::to_string) else {
+        return serde_json::json!({"configured": false, "text": "No local build folder picked yet."});
+    };
+    let p = PathBuf::from(&dir);
+    #[cfg(target_os = "macos")]
+    {
+        let (ok, stale) = resume_vault_access(&p);
+        if !ok {
+            return serde_json::json!({"configured": true, "status": "unreadable", "dir": dir,
+                "text": format!("Cannot read {dir} any more — pick the folder again.")});
+        }
+        if stale {
+            remember_vault_access(&p);
+        }
+    }
+    let cur = env!("CARGO_PKG_VERSION");
+    match updates::scan_dir(&p) {
+        Some(b) => {
+            let newer = plugin_store::version_gt(&b.version, cur);
+            serde_json::json!({"configured": true, "dir": dir, "version": b.version,
+                "path": b.path.to_string_lossy(),
+                "status": if newer { "available" } else { "current" },
+                "text": format!("Local build {} at {} — this app runs {cur}.", b.version, b.path.display())})
+        }
+        None => serde_json::json!({"configured": true, "status": "none", "dir": dir,
+            "text": format!("No Opensidian.app or Opensidian-<version>-*.dmg in {dir}.")}),
+    }
+}
+
+/// reveal the build in Finder: a sandboxed app cannot replace /Applications
+/// itself, so the last step stays the user's drag
+#[tauri::command]
+fn update_local_reveal(path: String) -> Result<(), String> {
+    let p = PathBuf::from(&path);
+    if !p.exists() {
+        return Err(format!("no longer there: {path}"));
+    }
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&p)
+        .spawn()
+        .map(|_| ())
+        .map_err(|e| format!("open -R: {e}"))
+}
+
+
 #[cfg(not(target_os = "macos"))]
 fn boot_sandbox_panel(_app: &tauri::App, _pending: Option<&Path>) {}
 
@@ -6392,7 +6458,7 @@ fn main() {
             desk_net_listen, desk_net_accept, desk_net_close, desk_sock_read, desk_sock_write, desk_sock_end, desk_sock_destroy,
             desk_http_request, desk_shell,
             plugin_store::store_list, plugin_store::store_detail, plugin_store::store_install, plugin_store::store_uninstall,
-            updates::update_check,
+            updates::update_check, update_local_dir, update_local_check, update_local_reveal,
             themes_scan, theme_css, get_css_theme, set_css_theme, theme_seed_report, vault_css_watch,
             get_quickfont, set_quickfont, get_fonts, set_font, font_families,
             get_hotkeys, set_hotkeys, open_external, save_debounce_ms, attach_files,

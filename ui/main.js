@@ -11295,14 +11295,52 @@ const SACT = {
    from the validated tag, opened through open_external. [upd:<status>:<latest>]
    is the census token a phase or a drive asserts on. */
 let sUpd = null, sUpdBusy = false;
+/* The second source: the folder of local builds (update_local_check). Rust knows
+   the version in that folder and compares it with the running one; the page only
+   asks. A folder is reachable under the sandbox only after the user picks it, so
+   an unset (or revoked) folder offers "Choose folder…" and nothing else.
+   [loc:<status>] is the census token. */
+function sCheckLocal(info) {
+  inv("update_local_check").then(r => {
+    let el = info.querySelector(".supdl");
+    if (!el) { el = document.createElement("div"); el.className = "sdesc supd supdl"; info.appendChild(el); }
+    el.dataset.status = String(r.status || "unset");
+    const link = (text, fn) => {
+      const s = document.createElement("span"); s.className = "slink supdlink"; s.tabIndex = 0;
+      s.textContent = text; s.onclick = ev => { ev.stopPropagation(); fn(); };
+      return s;
+    };
+    const pick = () => inv("choose_dir", { message: "Pick the folder that holds Opensidian builds" }).then(p => {
+      if (!p) return;
+      return inv("update_local_dir", { path: String(p) }).then(x => {
+        if (!x || !x.ok) { el.textContent = "Could not use that folder: " + String(x && x.error || "?"); return; }
+        sCheckLocal(info);
+      });
+    }).catch(err => say("Local folder: " + String(err && err.message || err)));
+    el.textContent = String(r.text || "");
+    if (!r.configured || r.status === "unreadable") {
+      el.append(link(" Choose folder…", pick));
+    } else if (r.status === "available") {
+      el.textContent = String(r.text).replace(/[.\s]+$/, "") + " — install it?";
+      el.append(
+        link(" Reveal", () => inv("update_local_reveal", { path: String(r.path) })
+          .catch(err => say("Reveal: " + String(err && err.message || err)))),
+        link(" Later", () => { el.textContent = "Kept the running build."; }),
+      );
+    } else if (r.status === "none") {
+      el.append(link(" Choose another folder…", pick));
+    }
+  }).catch(err => say("Local check: " + String(err && err.message || err)));
+}
 function sCheckUpdates(d) {
   if (sUpdBusy) return;
   const info = d.parentNode && d.parentNode.querySelector(".sinfo");
   if (!info) return;
   let out = info.querySelector(".supd");
   if (!out) { out = document.createElement("div"); out.className = "sdesc supd"; info.appendChild(out); }
-  out.textContent = "Checking douh/opensidian for a release…";
+  out.textContent = "Checking douh/opensidian and the local build folder…";
   sUpdBusy = true; sUpd = { status: "checking", latest: "" }; updateTitle();
+  sCheckLocal(info);
   inv("update_check").then(res => {
     sUpd = { status: String(res.status), latest: String(res.latest || "") };
     out.dataset.status = sUpd.status;
