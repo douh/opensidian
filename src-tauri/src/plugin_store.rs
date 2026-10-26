@@ -205,7 +205,189 @@ pub fn http_get(logical: &str, cap: u64, what: &str) -> Result<Vec<u8>, String> 
     Err(format!("{what}: more than {MAX_REDIRECTS} redirects"))
 }
 
-#[cfg(not(target_os = "linux"))]
+/// macOS: no libsoup3, and the repo's no-new-crates rule rules out a TLS stack,
+/// so every hop is one invocation of the system curl. The egress checks above
+/// still own the loop: every Location is re-checked before its hop and curl
+/// itself never follows a redirect. The byte cap is enforced twice — curl's
+/// --max-filesize stops the transfer, the length read back is checked again.
+#[cfg(target_os = "macos")]
+pub fn http_get(logical: &str, cap: u64, what: &str) -> Result<Vec<u8>, String> {
+    let base = mirror_base();
+    let mut cur = check_url(logical)?;
+    let deadline = Instant::now() + DEADLINE;
+    for _ in 0..=MAX_REDIRECTS {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err(format!("{what}: timed out"));
+        }
+        let wire = wire_url(&cur, base.as_ref());
+        let (code, location, body) = curl_hop(&cur, &wire, base.is_some(), cap, left, what)?;
+        if (300..400).contains(&code) && code != 304 {
+            let loc = location.ok_or_else(|| format!("{what}: HTTP {code} without a Location"))?;
+            cur = next_hop(&cur, &loc, base.as_ref()).map_err(|e| format!("{what}: redirect {e}"))?;
+            continue;
+        }
+        if code != 200 {
+            let hint = if (code == 403 || code == 429) && cur.host_str() == Some("api.github.com") {
+                " (GitHub's anonymous API rate limit; try again later)"
+            } else {
+                ""
+            };
+            return Err(format!("{what}: HTTP {code} from {}{hint}", cur.host_str().unwrap_or("?")));
+        }
+        return Ok(body);
+    }
+    Err(format!("{what}: more than {MAX_REDIRECTS} redirects"))
+}
+
+/// one request, no redirects followed: (status, Location, body)
+#[cfg(target_os = "macos")]
+fn curl_hop(
+    logical: &url::Url,
+    wire: &str,
+    mirror: bool,
+    cap: u64,
+    left: Duration,
+    what: &str,
+) -> Result<(u32, Option<String>, Vec<u8>), String> {
+    use std::process::Command;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    // per-hop scratch files; unique per process AND per call, so two fetches
+    // (the list and the stats) never read each other's headers or body
+    let tag = format!("{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed));
+    let hdr = std::env::temp_dir().join(format!("opensidian-fetch-{tag}.h"));
+    let body = std::env::temp_dir().join(format!("opensidian-fetch-{tag}.b"));
+    let secs = left.as_secs().clamp(1, IO_TIMEOUT_S as u64).to_string();
+    let mut args: Vec<String> = vec![
+        "-sS".into(),
+        "--max-redirs".into(),
+        "0".into(),
+        "--connect-timeout".into(),
+        IO_TIMEOUT_S.to_string(),
+        "--max-time".into(),
+        secs,
+        "--max-filesize".into(),
+        cap.to_string(),
+        "-A".into(),
+        concat!("opensidian/", env!("CARGO_PKG_VERSION"), " plugin-browser").into(),
+        "-D".into(),
+        hdr.display().to_string(),
+        "-o".into(),
+        body.display().to_string(),
+        "-w".into(),
+        "%{http_code}".into(),
+        // production fetches are https-only; the loopback fixture mirror is http
+        "--proto".into(),
+        if mirror { "=http,https".into() } else { "=https".into() },
+        "--url".into(),
+        wire.into(),
+    ];
+    // keep --proxy next to the URL it applies to; env proxies are left to curl
+    args.splice(args.len() - 2..args.len() - 2, proxy_args());
+    if logical.host_str() == Some("api.github.com") {
+        args.extend(["-H".into(), "Accept: application/vnd.github+json".into()]);
+    }
+    let out = Command::new("/usr/bin/curl")
+        .args(&args)
+        .output()
+        .map_err(|e| format!("{what}: cannot run /usr/bin/curl: {e}"))?;
+    let headers = fs::read(&hdr).unwrap_or_default();
+    let bytes = fs::read(&body).unwrap_or_default();
+    let _ = fs::remove_file(&hdr);
+    let _ = fs::remove_file(&body);
+    if !out.status.success() {
+        let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+        return Err(match out.status.code() {
+            Some(63) => format!("refused: {what} is larger than the {cap}-byte cap"),
+            Some(28) => format!("{what}: timed out"),
+            Some(c) => format!("{what}: curl exit {c}{}", if err.is_empty() { String::new() } else { format!(": {err}") }),
+            None => format!("{what}: curl was killed"),
+        });
+    }
+    let (code, location) = last_status_and_location(&headers);
+    let code = code.ok_or_else(|| format!("{what}: no HTTP status from curl"))?;
+    if bytes.len() as u64 > cap {
+        return Err(format!("refused: {what} is larger than the {cap}-byte cap"));
+    }
+    Ok((code, location, bytes))
+}
+
+/// the LAST response block's status + Location (a proxy CONNECT may add one first)
+#[cfg(target_os = "macos")]
+fn last_status_and_location(headers: &[u8]) -> (Option<u32>, Option<String>) {
+    let text = String::from_utf8_lossy(headers);
+    let (mut code, mut loc) = (None, None);
+    for line in text.lines() {
+        if line.starts_with("HTTP/") {
+            code = line.split_whitespace().nth(1).and_then(|c| c.parse().ok());
+            loc = None;
+        } else if line.get(..9).is_some_and(|h| h.eq_ignore_ascii_case("location:")) {
+            loc = Some(line[9..].trim().to_string());
+        }
+    }
+    (code, loc)
+}
+
+/// curl must learn the proxy the session actually uses. A Finder launch inherits
+/// no *_proxy environment, and /usr/bin/curl does not read the macOS network
+/// settings by itself, so the fetch would go direct and fail on a proxied
+/// network. Env wins when present (curl reads it anyway); otherwise ask scutil.
+/// Cached: per-hop shelling out to scutil would be noise, and a proxy change
+/// mid-fetch is not a case worth re-reading for.
+#[cfg(target_os = "macos")]
+fn proxy_args() -> Vec<String> {
+    static P: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    let p = P.get_or_init(|| {
+        let env_proxy = ["http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"]
+            .iter()
+            .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
+        if env_proxy {
+            return None;
+        }
+        let out = std::process::Command::new("/usr/sbin/scutil").arg("--proxy").output().ok()?;
+        parse_scutil_proxy(&String::from_utf8_lossy(&out.stdout))
+    });
+    match p {
+        Some(u) => vec!["--proxy".into(), u.clone()],
+        None => Vec::new(),
+    }
+}
+
+/// `scutil --proxy` dictionary -> curl --proxy URL. HTTPS first, then HTTP, then
+/// SOCKS; an entry is used only when its Enable flag is 1 and host+port are set.
+#[cfg(target_os = "macos")]
+pub fn parse_scutil_proxy(text: &str) -> Option<String> {
+    fn field(text: &str, k: &str) -> Option<String> {
+        text.lines().find_map(|l| {
+            let (kk, v) = l.split_once(':')?;
+            (kk.trim() == k).then(|| v.trim().to_string())
+        })
+    }
+    let on = |k: &str| field(text, k).as_deref() == Some("1");
+    let pair = |h: &str, p: &str| match (field(text, h), field(text, p)) {
+        (Some(h), Some(p)) if !h.is_empty() && !p.is_empty() => Some((h, p)),
+        _ => None,
+    };
+    if on("HTTPSEnable") {
+        if let Some((h, p)) = pair("HTTPSProxy", "HTTPSPort") {
+            return Some(format!("http://{h}:{p}"));
+        }
+    }
+    if on("HTTPEnable") {
+        if let Some((h, p)) = pair("HTTPProxy", "HTTPPort") {
+            return Some(format!("http://{h}:{p}"));
+        }
+    }
+    if on("SOCKSEnable") {
+        if let Some((h, p)) = pair("SOCKSProxy", "SOCKSPort") {
+            return Some(format!("socks5h://{h}:{p}"));
+        }
+    }
+    None
+}
+
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "macos"))))]
 pub fn http_get(logical: &str, _cap: u64, what: &str) -> Result<Vec<u8>, String> {
     check_url(logical)?;
     Err(format!("{what}: the plugin browser has no network client on this platform"))
@@ -547,6 +729,32 @@ pub(crate) async fn store_uninstall(v: tauri::State<'_, crate::Vault>, id: Strin
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// macOS fetch: the status/Location parser sees the LAST block only, so a
+    /// proxy CONNECT block cannot shadow the real response (and a missing
+    /// Location is None, which the caller turns into "HTTP 3xx without a Location")
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn curl_headers_take_the_last_block_and_its_location() {
+        let h = b"HTTP/1.1 200 Connection established\r\n\r\nHTTP/2 302\r\nLocation: https://github.com/x/y\r\n\r\n";
+        assert_eq!(last_status_and_location(h), (Some(302), Some("https://github.com/x/y".into())));
+        assert_eq!(last_status_and_location(b"HTTP/2 200\r\ncontent-type: application/json\r\n"), (Some(200), None));
+        let h = b"HTTP/2 302\r\nLocation: https://a/b\r\n\r\nHTTP/2 200\r\ncontent-type: x\r\n";
+        assert_eq!(last_status_and_location(h), (Some(200), None));
+    }
+
+    /// macOS fetch: scutil's proxy dictionary becomes the curl --proxy URL; a
+    /// disabled or incomplete entry is None, never a proxy that goes nowhere
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn scutil_proxy_prefers_https_and_skips_disabled_entries() {
+        let https = "<dictionary> {\n  HTTPEnable : 1\n  HTTPPort : 8080\n  HTTPProxy : 10.0.0.2\n  HTTPSEnable : 1\n  HTTPSPort : 7890\n  HTTPSProxy : 127.0.0.1\n  SOCKSEnable : 0\n}\n";
+        assert_eq!(parse_scutil_proxy(https).as_deref(), Some("http://127.0.0.1:7890"));
+        let socks = "<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n  SOCKSEnable : 1\n  SOCKSPort : 1080\n  SOCKSProxy : ::1\n}\n";
+        assert_eq!(parse_scutil_proxy(socks).as_deref(), Some("socks5h://::1:1080"));
+        assert_eq!(parse_scutil_proxy("<dictionary> {\n  HTTPEnable : 0\n  HTTPSEnable : 0\n  SOCKSEnable : 0\n}\n"), None);
+        assert_eq!(parse_scutil_proxy("<dictionary> {\n  HTTPSEnable : 1\n  HTTPSProxy : 127.0.0.1\n}\n"), None, "no port");
+    }
 
     #[test]
     fn allowlist_is_exact_and_https_only() {
