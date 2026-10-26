@@ -10,6 +10,11 @@ Open-source and non-profit under GPLv3, vault-compatible cross-platform markdown
 - [[wikilinks]], backlinks, tags, graph view
 - tabs, splits, search, quick switcher, command palette, bookmarks
 - themes, fonts, hotkeys; open a vault with `opensidian <folder>`
+- interface in Simplified Chinese or English, or follow the system language
+  (**Settings ▸ General ▸ Language**, or the palette command "Switch interface
+  language"; `OPENSIDIAN_LOCALE=zh-CN` pins a launch). The translated surface is
+  the chrome, the settings panes and the command registry — row descriptions,
+  context menus and the native macOS menu are still English.
 - drag an image (png, jpg, gif, webp) or a PDF from your file manager onto a note:
   an image is **moved** into the vault (the original is removed only after the
   vault copy is complete and on disk), a PDF is **copied** (the original stays,
@@ -19,6 +24,15 @@ Open-source and non-profit under GPLv3, vault-compatible cross-platform markdown
 
 ## Install
 Linux x86_64. Download one:
+
+> **This fork.** `douh/opensidian` is a macOS-focused fork of
+> [jpzk/opensidian](https://github.com/jpzk/opensidian). The downloads below and
+> their signed `SHA256SUMS` are **upstream's** Linux releases; the fork publishes
+> no signed builds, so on macOS build it from source (§ Build from source ▸
+> macOS). **Settings ▸ General ▸ Check for updates** compares this build against
+> the fork's own release list *and* an optional local build folder, shows the two
+> answers separately, and only offers to reveal or download — it never claims a
+> signature it cannot verify, and inside the App Sandbox it cannot install.
 
 | Download | Choose it if | Tested on (fresh install, 2026-10-24) |
 |---|---|---|
@@ -181,7 +195,8 @@ stays on AnuPpuccin.
 Off by default. Each vault starts in restricted mode: no community plugin code runs.
 
 **Turning it on.** Open **Settings ▸ Community plugins** and switch **Restricted mode** off. The
-choice is per vault and is saved in `~/.opensidian.json`, outside the vault, so a vault you open
+choice is per vault and is saved in `~/.opensidian.json` — inside the App Sandbox
+container on macOS (§ macOS above) — outside the vault, so a vault you open
 cannot turn its own plugins on.
 
 **What that means.** With restricted mode off, the plugins you enable run code from the internet
