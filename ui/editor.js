@@ -2266,13 +2266,24 @@ Ed.lpExt = function (v, G) {
      belong in a StateField (Ed.hlExt does the same for its marks); detection is
      cached per doc, so a caret move only refilters the list. */
   const lpBlocks = CMs.StateField.define({
-    create(st) { const s = scanBlocks(st.doc); return { doc: st.doc, list: s.list, index: s.index, set: blockSet(st.doc, s.list, st.selection.main) }; },
+    create(st) { const s = scanBlocks(st.doc); return { doc: st.doc, list: s.list, index: s.index, raw: rawNow(), set: blockSet(st.doc, s.list, st.selection.main) }; },
     update(val, tr) {
       const s = tr.docChanged ? scanBlocks(tr.state.doc) : { list: val.list, index: val.index };
-      return { doc: tr.state.doc, list: s.list, index: s.index, set: blockSet(tr.state.doc, s.list, tr.state.selection.main) };
+      return { doc: tr.state.doc, list: s.list, index: s.index, raw: rawNow(), set: blockSet(tr.state.doc, s.list, tr.state.selection.main) };
     },
     provide: f => CMv.EditorView.decorations.from(f, v => v.set),
   });
+  /* `.lp.src` lives on the LP element, so the field cannot see it change; the
+     mode switch calls this once, AFTER the LP is laid out (dispatching from
+     applyMode ran a full rebuild over a half-switched view and killed Ctrl+E).
+     No-op unless the field's picture of the mode actually differs. */
+  v._lpSync = () => {
+    const cm = v.cm;
+    if (!cm) return;
+    const val = cm.state.field(lpBlocks, false);
+    if (!val || val.raw === rawNow()) return;
+    cm.dispatch({ effects: bust.of(null) });
+  };
 
   const build = view => {
     const g = G(), st = view.state, doc = st.doc, sel = st.selection.main, out = [], labels = [];
