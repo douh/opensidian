@@ -534,5 +534,10 @@
       loadMermaid: () => Promise.reject(unsupported("loadMermaid (Mermaid is not bundled)")),
     };
     Object.assign(K.exportValues, GATED);
+    /* The core reading view typesets `$…$` / `$$…$$` with this SAME loader and
+       the same vendored bytes (main.js: typesetMath). api.js deletes
+       __osApiParts the moment it merges the parts, so this is the only handle
+       core can still read; the loader stays off any other global. */
+    window.__osVendor = Object.assign(window.__osVendor || {}, { loadMathJax });
   });
 })();

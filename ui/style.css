@@ -1482,6 +1482,20 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
    `cursor` on a form control; the census phase reads the live value either way.
    LP's box is NOT named here — live preview is editable and unchanged. */
 .preview input[type=checkbox] { cursor: default }
+/* tablewrap + mathrender — the reading view's two missing block renderings.
+   pulldown already emits a real <table> and a <span class="math math-inline|
+   math-display"> holding the TeX; only the styling and a typesetter were
+   missing. A table scrolls INSIDE the note (the pane's own overflow-x is
+   hidden, so an unwrapped wide table would be clipped with no way to reach
+   its columns); math is typeset from the vendored MathJax by main.js, and a
+   span that could not be typeset keeps its source text on purpose. */
+.preview .tblwrap { max-width: var(--note-column, none); margin-inline: auto; overflow-x: auto }
+.preview table { border-collapse: collapse; margin-block: var(--p-spacing); font-variant-numeric: tabular-nums }
+.preview th, .preview td { border: 1px solid var(--background-modifier-border); padding: 4px 10px; vertical-align: top }
+.preview th { background: var(--background-primary-alt); font-weight: var(--bold-weight) }
+.preview .math-display { display: block; margin-block: var(--p-spacing); text-align: center }
+.preview .math-inline { display: inline }
+.preview mjx-container { max-width: 100% }
 /* goal/listlinks — reading view list/link geometry
    (docs/listlinks/recon.md REQ-n). .preview only; live preview untouched. */
 .preview ul > li::before { inset-inline-start: calc(-12.8px - var(--list-bullet-size) / 2) }   /* REQ-1: dot centre = text x - 12.8 */

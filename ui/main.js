@@ -6524,6 +6524,44 @@ function extClick(e, a) {   // `a` unused: kept for the Ed.extClick(e, a) signat
 // Only a style attribute on #preview ITSELF is ignored; any other record (a child,
 // a text, data-title, a class) still marks it dirty.
 const pvTouched = (P, recs) => recs.some(r => r.target !== P || r.type !== "attributes" || (r.attributeName !== "style" && r.attributeName !== "class"));   // opt6: + the vkeep class flip
+/* tablewrap + mathrender (CSS in style.css): pulldown already emits a real
+   <table> and a <span class="math math-inline|math-display"> holding the TeX,
+   but the reading DOM is inert HTML — a wide table is clipped by the pane's
+   overflow-x:hidden, and `$$…$$` stays source text. Tables are wrapped so they
+   scroll in place; math is typeset by the SAME vendored MathJax plugins get
+   (window.__osVendor, published by api-functions.js). EVERY note is typeset,
+   not an opt-in: a formula is content, not a plugin feature. A failed load
+   leaves the plain span — honest source, never an empty box. */
+function wrapTables(P) {
+  for (const t of P.querySelectorAll("table")) {
+    const w = document.createElement("div");
+    w.className = "tblwrap";
+    t.replaceWith(w);
+    w.appendChild(t);
+  }
+}
+
+function typesetMath(P, src) {
+  const ns = P.querySelectorAll(".math-inline, .math-display");
+  if (!ns.length) return;
+  const V = window.__osVendor;
+  if (!V) return;                       // plugin API never booted: the TeX stays visible
+  const batch = MJ => {
+    for (const n of ns) {
+      if (!n.isConnected) continue;     // a newer render replaced this DOM
+      try {
+        n.replaceChildren(MJ.tex2chtml(n.textContent, { display: n.classList.contains("math-display") }));
+      } catch (e) { console.error("[math]", e); }
+    }
+    // async (first load) only: these writes are ours, not a user edit, so the
+    // retained reading DOM must not look dirty — but only while this render
+    // still owns the pane, or a newer note would inherit the clean flag.
+    if (P._pvObs && P._pvk && P._pvk.src === src) { P._pvObs.takeRecords(); P._pvDirty = false; }
+  };
+  if (window.MathJax && typeof window.MathJax.tex2chtml === "function") batch(window.MathJax);
+  else V.loadMathJax().then(batch).catch(e => console.error("[math]", e));
+}
+
 async function preview(g, sw) {   // sw: called by setMode (the edit -> reading switch)
   const src = g.editor.value, P = g.preview;
   // modeswitch opt2: the reading DOM is RETAINED while the pane shows the edit
@@ -6577,6 +6615,8 @@ async function preview(g, sw) {   // sw: called by setMode (the edit -> reading 
   // pre-modeswitch path, never a stale view.
   for (const s of g.preview.querySelectorAll("span.pdf-embed")) Ed.pdfFill(s);
   cvEmbedFill(g.preview);                    // cv-vault CV-139: ![[X.canvas]] -> span.cv-embed (before the a.wiki wiring below)
+  wrapTables(g.preview);
+  typesetMath(g.preview, src);
   mswpMark("html");
   g.pvLines = pvL;
   mswpMark("blines");
