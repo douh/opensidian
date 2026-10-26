@@ -2080,6 +2080,41 @@ Ed.lpLeaves = function (row) {            // the text-less leaves of a rendered 
   walk(row);
   return out;
 };
+/* A fenced code block (``` or ~~~, three or more marks, up to three spaces of
+   indent) — the LP counterpart of the reading view's Prism/Mermaid pass. Pure
+   on purpose, so the parsing rules can be pinned without a view or a DOM
+   (tests/lpblocks.rs): `doc` only needs `.line(n).text`. Returns
+   `{ e, lang, body, open }`, where `e` is the LAST line (the closing fence when
+   `open` is false, the end of the document otherwise), `lang` the lower-cased
+   info word ("" when the fence carries none) and `body` the content with the
+   opening indent removed. `null` when this line opens no fence. A backtick
+   fence whose info string contains a backtick is inline code, not a fence
+   (CommonMark), so ```js``` on one line stays a row. */
+Ed.fenceAt = function (doc, n, hi) {
+  const m = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(doc.line(n).text);
+  if (!m) return null;
+  const mark = m[1], ch = mark[0], info = m[2].trim();
+  if (ch === "`" && info.indexOf("`") >= 0) return null;
+  const lang = (info.split(/\s+/)[0] || "").toLowerCase();
+  const ind = m[0].indexOf(mark);            // 0..3 spaces before the marks
+  const closes = t => {                      // same char, at least as many, nothing after
+    let i = 0;
+    while (i < 3 && t[i] === " ") i++;
+    let j = i;
+    while (t[j] === ch) j++;
+    return j - i >= mark.length && t.slice(j).trim() === "";
+  };
+  let e = hi + 1;
+  for (let x = n + 1; x <= hi; x++) if (closes(doc.line(x).text)) { e = x; break; }
+  const open = e > hi;
+  const body = [];
+  for (let x = n + 1; x < e && x <= hi; x++) {
+    const t = doc.line(x).text;
+    let k = 0; while (k < ind && t[k] === " ") k++;      // CommonMark: take off the opening indent, no more
+    body.push(t.slice(k));
+  }
+  return { e: Math.min(e, hi), lang, body: body.join("\n"), open };
+};
 Ed.lpExt = function (v, G) {
   const { Decoration, ViewPlugin, WidgetType, EditorView } = CMv;
   const bust = CMs.StateEffect.define();
@@ -2169,6 +2204,48 @@ Ed.lpExt = function (v, G) {
     asked = true;
     window.__osVendor.loadMathJax().then(() => { const cm = cmView(); if (cm) cm.dispatch({ effects: bust.of(null) }); }).catch(e => console.error("[math]", e));
   };
+  /* ---- LP: fenced code and ```mermaid are BLOCKS too -----------------------
+     The reading view highlights fences with Prism and draws mermaid from the
+     same vendored bytes (main.js highlightCode/drawMermaid); live preview drew
+     both as source. A fence is ONE block replace decoration while the
+     selection is outside it — the rule tables and `$$…$$` already follow, so
+     nothing is ever edited against invisible text. Only the grammars Prism
+     bundles (markup, css, clike, javascript) are highlighted; an unbundled
+     language keeps plain text rather than guessing. A diagram that cannot be
+     parsed keeps its source, never a blank box. Loads are per session and end
+     in one bust, which redraws every pending widget at its final size. */
+  const redraw = () => {                     // a late promise may outlive the view
+    try { const cm = cmView(); if (cm) cm.dispatch({ effects: bust.of(null) }); } catch (_) {}
+  };
+  const readyPrism = () => !!(window.Prism && typeof window.Prism.highlight === "function");
+  let pAsked = false;
+  const wantPrism = () => {
+    if (pAsked || readyPrism() || !window.__osVendor) return;
+    pAsked = true;
+    window.__osVendor.loadPrism().then(redraw).catch(e => { pAsked = false; console.error("[prism]", e); });
+  };
+  const codeCache = new Map();               // "lang\ntext" -> highlighted html (build runs per caret move)
+  let mmdSeq = 0;
+  const mmdCache = new Map();                // fence source -> {svg} | {bad:true}
+  const mmdPending = new Set();
+  const mmdRender = src => {                 // one render per diagram; the bust redraws it at full size
+    if (mmdCache.has(src) || mmdPending.has(src) || !window.__osVendor) return;
+    mmdPending.add(src);
+    window.__osVendor.loadMermaid().then(async m => {
+      const id = "mmd-lp-" + (++mmdSeq);
+      try {
+        mmdCache.set(src, { svg: (await m.render(id, src)).svg });   // Mermaid's own sanitised SVG
+        if (mmdCache.size > 40) { const k = mmdCache.keys().next().value; if (k !== src) mmdCache.delete(k); }
+      } catch (e) {
+        console.error("[mermaid]", e);
+        const junk = document.getElementById("d" + id);       // Mermaid leaves its scratch node behind on error
+        if (junk) junk.remove();
+        mmdCache.set(src, { bad: true });
+      }
+      mmdPending.delete(src);
+      redraw();
+    }).catch(e => { mmdPending.delete(src); console.error("[mermaid]", e); });
+  };
   const mcache = new Map();                  // tex -> CHTML node; clone per widget (build runs per caret move)
   const texNode = (tex, disp) => {
     const k = (disp ? "d:" : "i:") + tex;
@@ -2203,47 +2280,93 @@ Ed.lpExt = function (v, G) {
     }
   }
   class BlockW extends WidgetType {
-    constructor(k, t, n) { super(); this.k = k; this.t = t; this.n = n; this.ready = k === "math" ? readyMath() : true; }
-    eq(o) { return o.k === this.k && o.t === this.t && o.ready === this.ready; }
-    get estimatedHeight() { return this.k === "math" ? 56 : Math.min(600, this.t.split("\n").length * 26 + 8); }
+    constructor(k, t, n, lang) {
+      super(); this.k = k; this.t = t; this.n = n; this.lang = lang || "";
+      // `ready` is what makes a late load visible: CM6 reuses a widget whose eq()
+      // still matches, so a pending diagram must flip it once its SVG is cached.
+      this.ready = k === "math" ? readyMath()
+        : k === "code" ? readyPrism()
+        : k === "mermaid" ? mmdCache.has(t) : true;
+    }
+    eq(o) { return o.k === this.k && o.t === this.t && o.lang === this.lang && o.ready === this.ready; }
+    get estimatedHeight() {
+      if (this.k === "math") return 56;
+      const lines = this.t.split("\n").length;
+      if (this.k === "mermaid") { const c = mmdCache.get(this.t); return c && c.svg ? 260 : Math.min(600, lines * 26 + 20); }
+      return Math.min(800, lines * 22 + 24);
+    }
     ignoreEvent() { return true; }
     toDOM() {
       const box = document.createElement("div");
-      box.className = this.k === "math" ? "math-block" : "tbl-block";
-      if (this.k === "math") {
-        const tex = this.t.trim().replace(/^\$\$/, "").replace(/\$\$$/, "").trim();
-        const n = readyMath() ? texNode(tex, true) : null;
-        if (n) box.appendChild(n); else box.textContent = this.t;
-      } else {
-        const rows = this.t.split("\n");
-        const al = cells(rows[1] || "").map(a => /^:-+:$/.test(a) ? "center" : /^-+:$/.test(a) ? "right" : /^:-+$/.test(a) ? "left" : "");
-        const tbl = document.createElement("table");
-        tbl.className = "tblgrid";
-        const thead = document.createElement("thead"), htr = document.createElement("tr");
-        cells(rows[0] || "").forEach((c, i) => { const th = document.createElement("th"); th.textContent = c; if (al[i]) th.style.textAlign = al[i]; htr.appendChild(th); });
-        thead.appendChild(htr);
-        tbl.appendChild(thead);
-        const tbody = document.createElement("tbody");
-        for (const r of rows.slice(2)) {
-          const tr = document.createElement("tr");
-          cells(r).forEach((c, i) => { const td = document.createElement("td"); td.textContent = c; if (al[i]) td.style.textAlign = al[i]; tr.appendChild(td); });
-          tbody.appendChild(tr);
+      if (this.k === "math" || this.k === "tbl") {
+        box.className = this.k === "math" ? "math-block" : "tbl-block";
+        if (this.k === "math") {
+          const tex = this.t.trim().replace(/^\$\$/, "").replace(/\$\$$/, "").trim();
+          const n = readyMath() ? texNode(tex, true) : null;
+          if (n) box.appendChild(n); else box.textContent = this.t;
+        } else {
+          const rows = this.t.split("\n");
+          const al = cells(rows[1] || "").map(a => /^:-+:$/.test(a) ? "center" : /^-+:$/.test(a) ? "right" : /^:-+$/.test(a) ? "left" : "");
+          const tbl = document.createElement("table");
+          tbl.className = "tblgrid";
+          const thead = document.createElement("thead"), htr = document.createElement("tr");
+          cells(rows[0] || "").forEach((c, i) => { const th = document.createElement("th"); th.textContent = c; if (al[i]) th.style.textAlign = al[i]; htr.appendChild(th); });
+          thead.appendChild(htr);
+          tbl.appendChild(thead);
+          const tbody = document.createElement("tbody");
+          for (const r of rows.slice(2)) {
+            const tr = document.createElement("tr");
+            cells(r).forEach((c, i) => { const td = document.createElement("td"); td.textContent = c; if (al[i]) td.style.textAlign = al[i]; tr.appendChild(td); });
+            tbody.appendChild(tr);
+          }
+          tbl.appendChild(tbody);
+          box.appendChild(tbl);
         }
-        tbl.appendChild(tbody);
-        box.appendChild(tbl);
+      } else if (this.k === "mermaid") {
+        box.className = "mermaid-block";
+        const c = mmdCache.get(this.t);
+        if (c && c.svg) box.innerHTML = c.svg;
+        else if (c && c.bad) { box.classList.add("bad"); box.textContent = this.t; }
+        else {                                     // the source while the vendored build loads: never an empty box
+          box.classList.add("pending");
+          const pre = document.createElement("pre");
+          pre.textContent = this.t;
+          box.appendChild(pre);
+          mmdRender(this.t);
+        }
+      } else {                                     // fenced code: highlight only what Prism bundles
+        box.className = "code-block";
+        const pre = document.createElement("pre"), code = document.createElement("code");
+        if (this.lang) code.className = "language-" + this.lang;
+        const gram = this.lang && readyPrism() ? window.Prism.languages[this.lang] : null;
+        let html = null;
+        if (gram) {
+          const key = this.lang + "\n" + this.t;
+          html = codeCache.get(key);
+          if (html == null) {
+            try { html = window.Prism.highlight(this.t, gram, this.lang); } catch (e) { console.error("[prism]", e); }
+            if (html != null) { if (codeCache.size > 200) codeCache.clear(); codeCache.set(key, html); }
+          }
+        } else if (this.lang && !readyPrism()) wantPrism();
+        if (html != null) code.innerHTML = html; else code.textContent = this.t;
+        pre.appendChild(code);
+        box.appendChild(pre);
       }
       box.addEventListener("mousedown", e => { e.preventDefault(); caretTo(this.n, 0); });
       return box;
     }
   }
   const rawNow = () => { const g = G(); return !!(g && g.lp && g.lp.classList.contains("src")); };
-  const scanBlocks = doc => {                 // every table / `$$…$$` run, once per doc
+  const scanBlocks = doc => {                 // every table / `$$…$$` / fenced-code run, once per doc
     const list = [], index = new Map();
     for (let n = 1; n <= doc.lines; n++) {
-      const e = tableAt(doc, n, doc.lines) || mathAt(doc, n, doc.lines);
-      if (!e) continue;
-      const b = { k: tableAt(doc, n, doc.lines) ? "tbl" : "math", n, e,
-                  t: doc.sliceString(doc.line(n).from, doc.line(e).to) };
+      const te = tableAt(doc, n, doc.lines), me = te ? 0 : mathAt(doc, n, doc.lines),
+            fe = te || me ? null : Ed.fenceAt(doc, n, doc.lines);
+      if (!te && !me && !fe) continue;
+      const e = te || me || fe.e;
+      const b = te ? { k: "tbl", n, e, t: doc.sliceString(doc.line(n).from, doc.line(e).to) }
+              : me ? { k: "math", n, e, t: doc.sliceString(doc.line(n).from, doc.line(e).to) }
+              : { k: fe.lang === "mermaid" ? "mermaid" : "code", n, e, t: fe.body, lang: fe.lang };
       list.push(b);
       for (let x = n; x <= e; x++) index.set(x, b);
       n = e;
@@ -2256,7 +2379,7 @@ Ed.lpExt = function (v, G) {
     for (const b of all) {
       const bf = doc.line(b.n).from, bt = doc.line(b.e).to;
       if (sel.from <= bt && sel.to >= bf) continue;     // touched: the source stays
-      out.push(Decoration.replace({ widget: new BlockW(b.k, b.t, b.n), block: true }).range(bf, bt));
+      out.push(Decoration.replace({ widget: new BlockW(b.k, b.t, b.n, b.lang), block: true }).range(bf, bt));
     }
     return Decoration.set(out, true);
   };
@@ -2305,6 +2428,8 @@ Ed.lpExt = function (v, G) {
           const bf = doc.line(B.n).from, bt = doc.line(B.e).to;
           if (!(sel.from <= bt && sel.to >= bf)) {   // drawn by lpBlocks: skip the source lines
             if (B.k === "math") wantMath();
+            else if (B.k === "mermaid") mmdRender(B.t);
+            else if (B.k === "code" && B.lang && !readyPrism()) wantPrism();
             last = B.e;
             continue;
           }

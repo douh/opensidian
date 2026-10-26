@@ -1509,20 +1509,28 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
 .lp .tbl-block { overflow-x: auto; padding-block: 0.2em }
 .math-block { display: block; margin-block: 0.5em; text-align: center; overflow-x: auto }
 mjx-container { max-width: 100% }
-/* mermaid + prism — the reading view's fenced blocks. Mermaid replaces the
-   whole <pre> (one child per block, so the pvLines map stays aligned); a
-   diagram that fails to parse keeps its source in .bad. Prism token colours
-   come from the theme's own palette, so a light theme needs no second sheet. */
-.preview .mermaid-block { max-width: var(--note-column, none); margin: 0.6em auto; text-align: center; overflow-x: auto }
-.preview .mermaid-block svg { max-width: 100%; height: auto }
-.preview .mermaid-block.bad { text-align: start; font-family: var(--font-monospace); white-space: pre-wrap }
-.preview .token.comment, .preview .token.prolog, .preview .token.cdata, .preview .token.doctype { color: var(--text-faint); font-style: italic }
-.preview .token.punctuation, .preview .token.operator { color: var(--text-muted) }
-.preview .token.keyword, .preview .token.atrule, .preview .token.rule, .preview .token.important { color: var(--text-accent) }
-.preview .token.string, .preview .token.char, .preview .token.attr-value, .preview .token.regex { color: var(--color-green, #a6e3a1) }
-.preview .token.number, .preview .token.boolean, .preview .token.constant { color: var(--text-error) }
-.preview .token.function, .preview .token.class-name { color: var(--color-yellow, #f9e2af) }
-.preview .token.tag, .preview .token.property, .preview .token.selector, .preview .token.attr-name, .preview .token.builtin { color: var(--color-blue, #89b4fa) }
+/* mermaid + prism — the fenced blocks, in the reading view and in live
+   preview (main.js highlightCode/drawMermaid; editor.js BlockW). Mermaid
+   replaces the whole <pre> in reading view (one child per block, so the
+   pvLines map stays aligned) and the whole fence in LP; a diagram that fails
+   to parse keeps its source in .bad. Prism token colours come from the
+   theme's own palette, so a light theme needs no second sheet. */
+:is(.preview, .lp) .mermaid-block { max-width: var(--note-column, none); margin: 0.6em auto; text-align: center; overflow-x: auto }
+:is(.preview, .lp) .mermaid-block svg { max-width: 100%; height: auto }
+:is(.preview, .lp) .mermaid-block.bad { text-align: start; font-family: var(--font-monospace); white-space: pre-wrap }
+:is(.preview, .lp) .token.comment, :is(.preview, .lp) .token.prolog, :is(.preview, .lp) .token.cdata, :is(.preview, .lp) .token.doctype { color: var(--text-faint); font-style: italic }
+:is(.preview, .lp) .token.punctuation, :is(.preview, .lp) .token.operator { color: var(--text-muted) }
+:is(.preview, .lp) .token.keyword, :is(.preview, .lp) .token.atrule, :is(.preview, .lp) .token.rule, :is(.preview, .lp) .token.important { color: var(--text-accent) }
+:is(.preview, .lp) .token.string, :is(.preview, .lp) .token.char, :is(.preview, .lp) .token.attr-value, :is(.preview, .lp) .token.regex { color: var(--color-green, #a6e3a1) }
+:is(.preview, .lp) .token.number, :is(.preview, .lp) .token.boolean, :is(.preview, .lp) .token.constant { color: var(--text-error) }
+:is(.preview, .lp) .token.function, :is(.preview, .lp) .token.class-name { color: var(--color-yellow, #f9e2af) }
+:is(.preview, .lp) .token.tag, :is(.preview, .lp) .token.property, :is(.preview, .lp) .token.selector, :is(.preview, .lp) .token.attr-name, :is(.preview, .lp) .token.builtin { color: var(--color-blue, #89b4fa) }
+/* LP only: the fence is a block widget, so the wrapper owns the margin and the
+   pending diagram shows its source (start-aligned) while Mermaid loads. */
+.lp .code-block { margin-block: 0.4em }
+.lp .code-block pre { margin: 0 }
+.lp .mermaid-block.pending { text-align: start }
+.lp .mermaid-block.pending pre { margin: 0 }
 /* goal/listlinks — reading view list/link geometry
    (docs/listlinks/recon.md REQ-n). .preview only; live preview untouched. */
 .preview ul > li::before { inset-inline-start: calc(-12.8px - var(--list-bullet-size) / 2) }   /* REQ-1: dot centre = text x - 12.8 */
