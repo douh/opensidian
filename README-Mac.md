@@ -79,9 +79,9 @@ hdiutil create -volname Opensidian -srcfolder Opensidian.app -ov -format UDZO Op
 
 解析顺序：localStorage 的 `os.locale` → `OPENSIDIAN_LOCALE` → 系统语言（`zh*` 归到 `zh-CN`）；`<html lang>` 同步更新。
 
-实现方式是 gettext 风格的「英文即 key」：`ui/i18n.js` 的 `ZH` 字典 + `PATTERNS`（带数字的串，如 `Version 0.8.1`、`Conflicts 2`）。为避免翻译到用户内容，静态文本只翻译 `STATIC` 白名单（`title` / `aria-label` / `placeholder` / 文本），控件默认值只翻译 `VALUES` 白名单；文件名、笔记标题、仓库路径永远不会被翻译。命令面板与热键筛选会同时匹配英文与译文，文件快速切换只匹配文件名。
+实现方式是 gettext 风格的「英文即 key」：`ui/i18n.js` 的 `ZH` 字典 + `PATTERNS`（带数字的串，如 `Version 0.9.0`、`Conflicts 2`）。为避免翻译到用户内容，静态文本只翻译 `STATIC` 白名单（`title` / `aria-label` / `placeholder` / 文本），控件默认值只翻译 `VALUES` 白名单；文件名、笔记标题、仓库路径永远不会被翻译。命令面板与热键筛选会同时匹配英文与译文，文件快速切换只匹配文件名。
 
-已覆盖：设置导航与各分区标题、设置行标签、命令面板与热键命令名、仓库选择器与四个对话框的静态文本、状态栏计数单位。尚未覆盖（仍为英文）：设置行的长描述、右键菜单、toast 通知、原生 macOS 菜单（`Settings…` 等在 Rust 侧硬编码），以及插件自带的文案；品牌名（`Bases`）与图形参数名刻意保留英文。
+已覆盖：设置导航与各分区标题、设置行标签、命令面板与热键命令名、仓库选择器与四个对话框的静态文本、状态栏计数单位，以及画布工具栏提示与帮助面板（`canvas-nav.js`）。尚未覆盖（仍为英文）：设置行的长描述、右键菜单、toast 通知、原生 macOS 菜单（`Settings…` 等在 Rust 侧硬编码）、插件自带的文案，以及画布设置面板与画布内其余对话框（`canvas-*.js` 约百条文案）。品牌名（`Bases`）与图形参数名刻意保留英文。
 
 ## MCP 服务器（只读）
 

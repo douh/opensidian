@@ -239,7 +239,7 @@
       const mo = document.createElement("div");
       mo.className = "canvas-settings-item canvas-settings-more"; mo.setAttribute("role", "menuitem");
       mo.style.cssText = "border-top:1px solid var(--background-modifier-border);margin-top:2px;padding-top:6px";
-      const t = document.createElement("span"); t.textContent = "More canvas settings"; mo.appendChild(t);
+      const t = document.createElement("span"); t.textContent = window.i18n.t("More canvas settings"); mo.appendChild(t);
       mo.addEventListener("click", e => { e.stopPropagation(); closeSettings(c); __osPluginSettings.openCanvasSettings(); });
       m.appendChild(mo); s.more = mo;
     }
@@ -288,11 +288,11 @@
   function openHelp(c) {
     if (help || !X || !X.Modal) return;
     const m = new X.Modal(c.app);
-    m.setTitle("Canvas help");
+    m.setTitle(window.t("Canvas help"));
     m.onOpen = function () {
       for (const [what, keys] of HELP) {
         const r = document.createElement("div"); r.className = "canvas-help-row";
-        const a = document.createElement("span"); a.textContent = what; r.appendChild(a);
+        const a = document.createElement("span"); a.textContent = window.t(what); r.appendChild(a);
         const b = document.createElement("span"); b.className = "canvas-help-keys"; b.textContent = keys; r.appendChild(b);
         this.contentEl.appendChild(r);
       }
@@ -309,8 +309,8 @@
     if (!X || !X.FuzzySuggestModal) return;
     const gs = groupsOf(c);
     const m = new X.FuzzySuggestModal(c.app);
-    m.setPlaceholder("Jump to group…");
-    m.emptyStateText = "No groups on this canvas.";
+    m.setPlaceholder(window.t("Jump to group…"));
+    m.emptyStateText = window.t("No groups on this canvas.");
     m.getItems = () => gs;
     m.getItemText = g => groupName(g);
     m.onChooseItem = g => { if (live(c) && c.nodes.get(g.id) === g) { jumpTo(c, g); ping(c); } };
@@ -452,8 +452,9 @@
         if (it === "|") { want.push(seps[k] || (seps[k] = Object.assign(document.createElement("div"), { className: "cvn-sep" }))); k++; continue; }
         const b = el.querySelector(it[1]); if (!b) continue;
         if (b.dataset.cvn !== it[0]) {
-          b.dataset.cvn = it[0]; b.dataset.tip = TIP[it[0]];
-          b.removeAttribute("title"); b.setAttribute("aria-label", TIP[it[0]]);
+          const tipText = window.t(TIP[it[0]]);
+          b.dataset.cvn = it[0]; b.dataset.tip = tipText;
+          b.removeAttribute("title"); b.setAttribute("aria-label", tipText);
           if (it[0] !== "set") b.innerHTML = ICON[it[0]];
         }
         want.push(b);

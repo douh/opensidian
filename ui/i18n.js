@@ -310,6 +310,29 @@
     "Native menus": "原生菜单",
     "Right-to-left (RTL)": "从右到左（RTL）",
     "Zoom level": "缩放级别",
+    /* --- canvas chrome: tooltips + help panel (strings live in canvas-nav.js) --- */
+    "Canvas help": "画布帮助",
+    "Canvas settings": "画布设置",
+    "More canvas settings": "更多画布设置",
+    "Zoom to fit (Shift + 1)": "适应画布（Shift + 1）",
+    "Zoom to fit": "适应画布",
+    "Zoom to selection": "缩放到选区",
+    "Undo": "撤销",
+    "Redo": "重做",
+    "Add text node": "添加文本卡片",
+    "Jump to group…": "跳转到分组…",
+    "No groups on this canvas.": "此画布上没有分组。",
+    "Pan the board": "平移画布",
+    "Pan sideways": "横向平移",
+    "Zoom": "缩放",
+    "Select all": "全选",
+    "Add to the selection": "加入选区",
+    "Create a card with specific size": "创建指定尺寸的卡片",
+    "Clone card": "克隆卡片",
+    "Constrain movement to axis": "限制为轴向移动",
+    "Disable snapping": "禁用吸附",
+    "Edit a card": "编辑卡片",
+    "Remove card": "删除卡片",
 
     /* --- default control values (see VALUES below) --- */
     "Vault folder": "仓库文件夹",
@@ -335,7 +358,7 @@
     "Exit Restricted mode": "退出受限模式",
   };
 
-  /* Strings the app builds at runtime carry a number: "Version 0.8.1",
+  /* Strings the app builds at runtime carry a number: "Version 0.9.0",
      "Plugin API version 1.13.7", "Conflicts 3". A regex keeps one entry per
      sentence instead of a key for every possible version. */
   const PATTERNS = [
