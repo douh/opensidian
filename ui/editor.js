@@ -1422,6 +1422,22 @@ const Ed = {
       const e7 = HC.create(host(["see [[Alpha#In"], 0, 14), { mode: "auto" });
       e7.sense({ typed: "n", moved: true });
       if (e7.state().phase !== "open" || e7.state().items[0].ins !== "Alpha#Intro") fail("hint:head");
+      /* ADR-7: Tab / Shift+Tab / a quick second Tab separate three cases.
+         Tab is the toggle and only where a list CAN open (manual mode proves it
+         is an explicit ask); the second Tab takes the first candidate; Shift+Tab
+         ends a list without inserting; with no list to open, Tab stays the
+         editor's indent (a fence's line start is the case people notice). */
+      const e9 = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "manual" });
+      if (e9.key({ key: "Tab" }) !== true || e9.state().phase !== "open") fail("hint:tabopen");
+      if (!e9.key({ key: "Tab" }) || e9.state().phase !== "off") fail("hint:tabtake");
+      if (e9.host.did.length !== 1 || e9.host.did[0].text !== "subgraph") fail("hint:tabcommit");
+      const e10 = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "auto" });
+      e10.sense({ typed: "s", moved: true });
+      if (e10.state().phase !== "open") fail("hint:open2");
+      if (!e10.key({ key: "Tab", shiftKey: true }) || e10.state().phase !== "off") fail("hint:shiftaway");
+      if (e10.host.did.length !== 0) fail("hint:shiftdirty");
+      const e11 = HC.create(host(["```mermaid", "flowchart TD", "   ", "```"], 2, 1), { mode: "auto" });
+      if (e11.key({ key: "Tab" })) fail("hint:ownindent");
       // an answer that arrives after the caret moved must be dropped, not painted
       const pend = [];
       HC.register({ id: "self:async", priority: 1, match: () => true, trigger: () => true,

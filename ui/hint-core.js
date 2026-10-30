@@ -38,12 +38,23 @@
    badge are what the popup shows.
 
    INTENT (the user's setting, localStorage "os.hints"):
-     auto    a typed character may open a list (default)
-     manual  only an explicit invoke (Ctrl+Space) opens one
-     off     nothing opens
-   plus per-provider on/off and the accept keys. `create(host, { mode,
+     mode   auto    a typed character may open a list (default)
+            manual  only an explicit ask opens one (Ctrl+Space, Tab)
+            off     nothing opens
+     keys   open    keys that open a list where one CAN open (default Tab)
+            accept  keys that take the selection while it is up (Enter, Tab)
+            dismiss keys that end it without inserting (Escape, Shift+Tab)
+            move    keys that walk the list (ArrowDown, ArrowUp, in this order)
+   plus per-provider on/off and a cap on rows. `create(host, { mode,
    providers })` overrides them for one engine only, which is how the self
    test proves all three intents without touching a saved preference.
+
+   ADR-7 (decided 2026-10-30): Tab is the toggle, Shift+Tab dismisses, and a
+   quick second Tab takes the first candidate — three gestures, three cases,
+   every list rebindable in the setting above. The toggle only CLAIMS a key
+   where a list can actually open; at a fence's line start, in prose or in a
+   list the key falls through to the editor, so indent/outdent never
+   disappear (Markdown and Mermaid rarely need Tab anyway).
 
    STATE: off | open. Events: sense (the editor saw a transaction), key (a
    keystroke arrived), reanchor (layout moved, repaint), close. Opening is
@@ -57,19 +68,46 @@
 
   const KEY = "os.hints";                       // the saved intent; see settings()
   const MODES = ["auto", "manual", "off"];
-  const DEFAULTS = { mode: "auto", accept: ["Enter", "Tab"], max: 8, providers: {} };
+  /* Rebinding is the point, so the defaults are named once (see ADR-7 above).
+     `move` is ordered: index 0 walks down, index 1 walks up. */
+  const KEYS = {
+    open: ["Tab"],
+    accept: ["Enter", "Tab"],
+    dismiss: ["Escape", "Shift+Tab"],
+    move: ["ArrowDown", "ArrowUp"],
+  };
+  const DEFAULTS = { mode: "auto", keys: KEYS, max: 8, providers: {} };
   let conf = null;                              // parsed once, mutated only by settings()
   const PROVIDERS = [];                         // asked in priority order, higher first
   let seq = 0;
 
   /* ---------- intent (settings) ---------- */
+  /* One spelling for every binding, so a list can say "Shift+Tab" while a
+     KeyboardEvent still reports key "Tab" with shiftKey true. Ctrl and Cmd
+     share the spelling: the fork binds the same chords on both platforms. */
+  function chord(e) {
+    const k = e.key === " " ? "Space" : e.key;
+    return (e.altKey ? "Alt+" : "") + (e.ctrlKey || e.metaKey ? "Ctrl+" : "") +
+           (e.shiftKey ? "Shift+" : "") + k;
+  }
+
+  function keys(o) {
+    const out = { open: KEYS.open.slice(), accept: KEYS.accept.slice(),
+                  dismiss: KEYS.dismiss.slice(), move: KEYS.move.slice() };
+    if (!o || typeof o !== "object") return out;
+    for (const k of Object.keys(out))
+      if (Array.isArray(o[k])) out[k] = o[k].filter(x => typeof x === "string" && x);
+    return out;
+  }
+
   /* `clean` is the schema: anything else on disk (an old key, a bad mode, a
      string where a boolean belongs) is dropped rather than half-honoured. */
   function clean(o) {
-    const out = { mode: DEFAULTS.mode, accept: DEFAULTS.accept.slice(), max: DEFAULTS.max, providers: {} };
+    const out = { mode: DEFAULTS.mode, keys: keys(o && o.keys), max: DEFAULTS.max, providers: {} };
     if (!o || typeof o !== "object") return out;
     if (MODES.indexOf(o.mode) >= 0) out.mode = o.mode;
-    if (Array.isArray(o.accept)) out.accept = o.accept.filter(k => typeof k === "string" && k);
+    // v0.1 kept the accept keys at the top level; honour that file once
+    if (!o.keys && Array.isArray(o.accept)) out.keys.accept = o.accept.filter(k => typeof k === "string" && k);
     if (typeof o.max === "number" && o.max > 0) out.max = Math.min(32, Math.round(o.max));
     if (o.providers && typeof o.providers === "object")
       for (const k of Object.keys(o.providers))
@@ -241,9 +279,11 @@
 
     /* The keys the engine owns. Returning true means "the editor must not see
        this key" — the caller does the preventing, so the engine stays testable
-       without an event object. */
+       without an event object. Nothing is claimed unless the engine can act:
+       a toggle with no list to open is the editor's key. */
     function key(e) {
       if (!e) return false;
+      const K = settings().keys, c = chord(e);
       const mod = !!(e.ctrlKey || e.metaKey), space = e.key === " " || e.code === "Space";
       if (mod && space) {                        // the explicit intent, any mode but off
         if (use() === "off") return false;
@@ -251,15 +291,24 @@
         if (p) offer(p, ctx, true);
         return true;                             // Ctrl+Space is ours either way: it must not insert a space
       }
-      if (st.phase !== "open") return false;
-      const n = st.items.length;
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        st.sel = (st.sel + (e.key === "ArrowDown" ? 1 : n - 1)) % n;
+      if (st.phase !== "open") {
+        /* ADR-7: the toggle only claims a key where a list CAN open. At a
+           fence's line start, in prose or in a list the key falls through, so
+           the editor's indent/outdent survive. */
+        if (use() !== "off" && K.open.indexOf(c) >= 0) {
+          const ctx = context(null), p = ctx && owner(ctx);
+          if (p) { offer(p, ctx, true); return true; }
+        }
+        return false;
+      }
+      const n = st.items.length, mv = K.move.indexOf(c);
+      if (mv >= 0 && n) {
+        st.sel = (st.sel + (mv === 0 ? 1 : n - 1)) % n;
         publish();
         return true;
       }
-      if (e.key === "Escape") { close("escape"); return true; }
-      if (settings().accept.indexOf(e.key) >= 0) { pick(st.sel); return true; }
+      if (K.dismiss.indexOf(c) >= 0) { close(c === "Escape" ? "escape" : "dismiss"); return true; }
+      if (K.accept.indexOf(c) >= 0) { pick(st.sel); return true; }
       return false;
     }
 
@@ -284,7 +333,7 @@
   }
 
   window.HintCore = {
-    SETTINGS_KEY: KEY, MODES, DEFAULTS,
+    SETTINGS_KEY: KEY, MODES, KEYS, DEFAULTS,
     register, unregister, providers: () => PROVIDERS.slice(),
     create, settings, mode, enabled,
   };

@@ -138,14 +138,45 @@ fn the_engine_owns_the_keys_while_a_list_is_up() {
     // typing. The engine returns "consumed" and the editor does the preventing,
     // so the engine stays testable without a synthetic event object.
     assert_has("ui/hint-core.js", &[
-        "if (e.key === \"ArrowDown\" || e.key === \"ArrowUp\") {",
-        "if (e.key === \"Escape\") { close(\"escape\"); return true; }",
-        "if (settings().accept.indexOf(e.key) >= 0) { pick(st.sel); return true; }",
+        "const n = st.items.length, mv = K.move.indexOf(c);",
+        "if (K.dismiss.indexOf(c) >= 0) { close(c === \"Escape\" ? \"escape\" : \"dismiss\"); return true; }",
+        "if (K.accept.indexOf(c) >= 0) { pick(st.sel); return true; }",
     ]);
     assert_has("ui/editor.js", &[
         "if (g._hints && g._hints.key(e)) { e.preventDefault(); e.stopPropagation(); return; }",
         "g._hints.sense({ typed: Ed.typedChar(u), moved: !!u.selectionSet, docChanged: true });",
         "if (!u.docChanged && g._hints && (u.geometryChanged || u.viewportChanged)) g._hints.reanchor();",
+    ]);
+}
+
+#[test]
+fn the_tab_gestures_are_separated_and_rebindable() {
+    // ADR-7 (2026-10-30): one key must not carry three meanings silently. Tab
+    // opens a list only where one CAN open (an explicit ask, so it also works
+    // in manual mode), a quick second Tab takes the first candidate, Shift+Tab
+    // ends the list without inserting, and with no list the key falls through
+    // to the editor — a fence's line start keeps its indent. The four lists are
+    // data in the saved setting, so anyone who wants the old behaviour (Tab =
+    // indent everywhere) can rebind them instead of editing code.
+    assert_has("ui/hint-core.js", &[
+        "const KEYS = {",
+        "open: [\"Tab\"],",
+        "accept: [\"Enter\", \"Tab\"],",
+        "dismiss: [\"Escape\", \"Shift+Tab\"],",
+        "move: [\"ArrowDown\", \"ArrowUp\"],",
+        "function chord(e) {",
+        "(e.shiftKey ? \"Shift+\" : \"\") + k;",
+        "if (use() !== \"off\" && K.open.indexOf(c) >= 0) {",
+        "if (p) { offer(p, ctx, true); return true; }",
+        "window.HintCore = {\n    SETTINGS_KEY: KEY, MODES, KEYS, DEFAULTS,",
+    ]);
+    // The old file shape (`accept` at the top level) is still read once, so an
+    // existing install keeps its accept keys instead of silently resetting.
+    assert_has("ui/hint-core.js", &["if (!o.keys && Array.isArray(o.accept)) out.keys.accept"]);
+    // The interactive proof runs at every launch, not just here.
+    assert_has("ui/editor.js", &[
+        "fail(\"hint:tabopen\")", "fail(\"hint:tabtake\")", "fail(\"hint:tabcommit\")",
+        "fail(\"hint:shiftaway\")", "fail(\"hint:ownindent\")",
     ]);
 }
 

@@ -7135,14 +7135,15 @@ function hintTok() {
 /* The intent command: ONE palette row for auto -> manual -> off. No bespoke
    chord (a user binds one in Settings ▸ Hotkeys if they want it); the notice
    says what changed, because a preference that silently changed is worse than
-   a menu that silently did nothing. Ctrl+Space is the manual invoke. */
+   a menu that silently did nothing. Ctrl+Space and Tab (ADR-7) are the
+   explicit asks; `off` owns no key at all, which is the point of `off`. */
 function cmdCycleHints() {
   if (!window.HintCore) return;
   const cur = HintCore.mode();
   const next = HintCore.MODES[(HintCore.MODES.indexOf(cur) + 1) % HintCore.MODES.length];
   HintCore.settings({ mode: next });
   hintsCloseAll("intent");
-  say("Completion hints: " + next + (next === "manual" ? " (Ctrl+Space opens the list)" : ""));
+  say("Completion hints: " + next + (next === "manual" ? " (Ctrl+Space or Tab opens the list)" : ""));
 }
 
 /* ---------- commands + keymap (target the focused group) ---------- */

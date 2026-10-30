@@ -111,9 +111,10 @@ fn the_hints_follow_typing_not_changes() {
     // The input flow lives in the ENGINE now, once, instead of in three helpers
     // in main.js: typing (only) may open, a caret move only refreshes a list
     // that still describes the caret, everything else only ends one, the arrow
-    // keys and accept keys belong to the list, Escape ends it. If any of these
-    // is dropped the popup degrades back to "a list that appears whenever the
-    // document changes" — the defect this flow was built to fix.
+    // keys and the accept keys belong to the list, and Escape/Shift+Tab end it
+    // (ADR-7: Tab opens only where a list can open, so indent survives). If any
+    // of these is dropped the popup degrades back to "a list that appears
+    // whenever the document changes" — the defect this flow was built to fix.
     assert_has("ui/editor.js", &[
         "typedChar(u) {",
         // the flow is keyed on the transaction's origin, not on change shapes:
@@ -128,8 +129,8 @@ fn the_hints_follow_typing_not_changes() {
         "if (use() !== \"auto\") return false;",            // manual/off are intents, not hints
         "if (!p || !p.trigger(typed, ctx)) return false;",
         "if (!inside(st.range, ctx)) return close(\"moved\");",
-        "if (e.key === \"Escape\") { close(\"escape\"); return true; }",
-        "if (settings().accept.indexOf(e.key) >= 0) { pick(st.sel); return true; }",
+        "if (K.dismiss.indexOf(c) >= 0) { close(c === \"Escape\" ? \"escape\" : \"dismiss\"); return true; }",
+        "if (K.accept.indexOf(c) >= 0) { pick(st.sel); return true; }",
     ]);
     // and the policy itself is pure, so selfTest proves it on every launch
     assert_has("ui/editor.js", &["fail(\"mmd:char\")", "fail(\"mmd:start\")"]);

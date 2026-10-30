@@ -191,15 +191,27 @@ cargo test --locked
 - 列表打开时，光标**仍在本词跨度内**就跟着重算（左/右移动即重新过滤），离开就结束；
 - 空格/标点/回车让 `match` 不再成立，列表当场结束，而不是"先关、再让字符落进去"。
 
-**用户意图。** `auto`（默认，打字即提示）/ `manual`（只有 Ctrl+Space 显式唤出）/ `off`（永不），另有按提供者开关与取用键；存在 `localStorage["os.hints"]`。命令面板一行 `hints:cycle-intent` 循环并给出提示当前值；`create(host, { mode, providers })` 可对单个引擎覆盖——自检据此在不改用户设置的前提下证明三种意图。
+**用户意图。** `auto`（默认，打字即提示）/ `manual`（只有显式唤出才开：Ctrl+Space 或 Tab）/ `off`（永不），另有按提供者开关与**键位表** `keys`（`open`/`accept`/`dismiss`/`move`，默认值见下）；存在 `localStorage["os.hints"]`。命令面板一行 `hints:cycle-intent` 循环并给出提示当前值；`create(host, { mode, providers })` 可对单个引擎覆盖——自检据此在不改用户设置的前提下证明三种意图。
 
 **异步归属。** `[[note#` 要跨文件读笔记，答案回来时光标可能已走。每次 `offer` 带一个 generation 令牌，只有最新那次允许上屏（旧实现里那句 `now.q !== ctx.q` 是这颗种子，现在是引擎级规则）。
 
-**键位**：引擎 `key(e)` 只回答"我要这个键"，`preventDefault` 由编辑器做（便于无事件对象地测试）。列表打开时 ↑/↓ 移选择、Enter/Tab 取用、Esc 结束；Ctrl+Space 是显式唤出，除 `off` 外一律吞掉，免得插进一个空格。
+**键位（ADR-7，已裁定 2026-10-30）**：引擎 `key(e)` 只回答"我要这个键"，`preventDefault` 由编辑器做（便于无事件对象地测试）。一个键不该同时背三种含义，所以 `Tab`、`Shift+Tab`、快速两次 `Tab` 各自对应一种情况；四张表都在 `os.hints` 的 `keys` 里，可改：
+
+| 手势 | 列表开着 | 列表关着 |
+|---|---|---|
+| `Tab` | 取用当前候选（`accept`） | 只在**能开列表的槽**上打开（`open`；`manual` 意图下也算显式唤出），其余位置原样交给编辑器 |
+| `Shift+Tab` | 结束列表且**不插入**（`dismiss`） | 交给编辑器（反缩进） |
+| 快速两次 `Tab` | —— | 第一下开、第二下取用 = 直接要第一个候选；不在提示槽上就是两次缩进 |
+| `↑` / `↓` | 移选择（`move`，表内顺序即下/上） | 编辑器 |
+| `Enter` | 取用（`accept`） | 编辑器（换行） |
+| `Esc` | 结束（`dismiss`） | 编辑器 |
+| `Ctrl+Space` | —— | 显式唤出，除 `off` 外一律吞掉，免得插进一个空格 |
+
+关键在于"**Tab 只在能开列表处被引擎吃掉**"：Mermaid/Markdown 很少真的用 Tab，但**缩进不能凭空消失**——围栏行首、正文、列表里的 Tab 仍归编辑器；mermaid 的 `subgraph` 体、Markdown 列表续行照常缩进。代价是：光标正落在某条语句的首词上时，第一下 Tab 开列表、第二下取用，想在那处缩进就得先改键（`HintCore.settings({ keys: { open: ["Ctrl+Space"] } })` 后 Tab 全部归还编辑器，未给的列表保持默认；旧版本存在顶层 `accept` 的设置文件会被一次性迁移进 `keys.accept`）。
 
 **插入**：两个提供者都走 `host.replace(range, text)` → `Ed.replace`（模型、行锚定、一次撤销、同脏标记、同保存路径）；`Ed.acInsert`/`Ed.acInsertText` 因此删除，全 app 只剩一条插入路径。
 
-**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题），失败以 `[edt:hint:…]` 出现在窗口标题。`src-tauri/tests/hint_engine.rs`（8 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、异步令牌；`tests/mermaid_hints.rs`（9 条）继续钉住 mermaid 的词表与连线。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现。
+**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题、Tab 开/双 Tab 取/Shift+Tab 不插入/无槽 Tab 归还），失败以 `[edt:hint:…]` 出现在窗口标题。`src-tauri/tests/hint_engine.rs`（9 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、ADR-7 的三手势与可改绑、异步令牌；`tests/mermaid_hints.rs`（9 条）继续钉住 mermaid 的词表与连线、以及"只有打字能开"的输入流。`tests/hint_nav.rs`（5 条）钉住 mermaid 语法表。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现。
 
 ## Mermaid：围栏里的语法提示
 
