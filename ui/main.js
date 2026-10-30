@@ -7073,33 +7073,61 @@ function caretXY(g) {    // R17: the real caret rect, relative to the pane
   return Ed.caretXY(g);
 }
 
+/* The last doc change, seen as what the user actually did — or null. This is
+   what makes the hint flow an INPUT flow rather than a "something changed"
+   flow: only typing opens a list. CM6 annotates the transaction with its
+   origin (input.type / input.paste / delete.* / undo / redo / programmatic),
+   so a paste, an undo, a drag-drop or our own acInsertText never triggers
+   hints — no heuristics on change shapes. Fast typing may batch two chars
+   into one transaction; we look at the LAST inserted character, so a batch
+   that ends in a word char still opens the list. */
+function acTypedChar(u) {
+  if (!u || !u.docChanged) return null;
+  const t = u.transactions[u.transactions.length - 1];
+  if (!t || !t.isUserEvent("input.type")) return null;
+  let typed = "", pure = true;
+  u.changes.iterChanges((fa, ta, fb, tb, ins) => {
+    if (ta === fa) typed += ins.toString();
+    else pure = false;                       // replaced/deleted text: not a word being typed
+  });
+  const m = pure && /([A-Za-z0-9_-])$/.exec(typed);
+  return m ? m[1] : null;
+}
+
 /* mermaid syntax hints (ui/mermaid-syntax.js): the SAME popup as [[ completion,
-   offered when the caret sits inside a ```mermaid fence. `fenceOf` asks
-   Ed.fenceAt, the very function the live preview uses to decide what is a
-   fence, so the row we complete is always a row the renderer will draw; the
-   vocabulary is checked against the vendored bytes by
-   src-tauri/tests/mermaid_hints.rs. `[[` wins when both could apply — a wiki
-   link inside a node label is still a wiki link. The span is located on the doc
-   LINE (not from the field offset) for the reason the [[ completion learned
-   earlier: an open lp row can shift offsets, a line cannot. */
-function mmdContext(g) {
+   offered when the user is TYPING a word inside a ```mermaid fence, at the
+   start of a statement. Three gates, in this order: typing (acTypedChar),
+   place (fenceOf -> Ed.fenceAt, the very function the live preview uses, so a
+   row we complete is always a row the renderer will draw), and position
+   (statementStart — labels, edge text and titles are prose and stay quiet).
+   The vocabulary is checked against the vendored bytes by
+   src-tauri/tests/mermaid_hints.rs. `[[` wins when both could apply: a wiki
+   link inside a node label is still a wiki link. The replaced span is located
+   on the doc LINE (not from a field offset) for the reason the [[ completion
+   learned earlier: an open lp row can shift offsets, a line cannot. */
+function mmdContext(g, u) {
   const MH = window.MmdHints;
   if (!MH || !Ed.fenceAt) return null;
+  const ch = acTypedChar(u);
+  if (!ch || !MH.wordChar(ch)) return null;               // typing only: paste, undo, space, Enter
   const L = Ed.lines(g), s = Ed.sel(g);
   if (!s || !L.length) return null;
   const n = s.b.l + 1;                                   // fenceOf counts lines from 1
   const f = MH.fenceOf({ line: i => ({ text: L[i - 1] || "" }) }, n, L.length);
   if (!f || f.lang !== "mermaid") return null;
   if (n <= f.start || (!f.unclosed && n >= f.end)) return null;   // the ``` lines themselves stay quiet
-  const sug = MH.suggest(L.slice(f.start, n - 1), L[s.b.l].slice(0, s.b.c));
-  if (!sug || !sug.items.length) return null;
+  const prefix = L[s.b.l].slice(0, s.b.c);
+  const sug = MH.suggest(L.slice(f.start, n - 1), prefix);
+  if (!sug || !sug.word || !sug.items.length) return null;
+  const before = prefix.slice(0, prefix.length - sug.word.length);
+  if (!MH.statementStart(before)) return null;           // inside a label/title: no popup
   return { l: s.b.l, from: s.b.c - sug.word.length, to: s.b.c, items: sug.items.slice(0, 8) };
 }
 
-async function showAc(g) {
+async function showAc(g, u) {
   const ctx = acContext(g);
   if (!ctx) {
-    const mm = mmdContext(g);
+    const mm = mmdContext(g, u);
     if (!mm) return hideAc();
     acKind = "m"; acLine = mm.l; acStart = mm.from; acEnd = mm.to; acItems = mm.items;
     acSel = 0;
@@ -7137,7 +7165,7 @@ async function showAc(g) {
       .slice(0, 8)
       .map(([, n]) => ({ ins: n, label: n, badge: "" }));
   }
-  acStart = ctx.start; acLine = 0; acEnd = -1; acKind = "n";   // a [[ after a mermaid hint must not insert through the line case
+  acStart = ctx.start; acLine = 0; acEnd = -1;   // every branch above has already set acKind, so a [[ never inherits "m"
   if (!acItems.length) return hideAc();
   acSel = 0;
   paintAc(g);
@@ -7169,6 +7197,13 @@ function acInsert(g, name) {   // R17: the [[ completion goes through the model;
   hideAc();
 }
 
+/* The popup's INPUT FLOW, defined once, in the editor's keydown order: while
+   the list is up, ↑/↓ move the selection (the caret must not move), Enter/Tab
+   take the item, Escape drops it, and any other printable key ends the word —
+   a space, a bracket or a comma closes the list before it reaches the editor,
+   so the next keystroke is always the one the user meant. Word characters are
+   deliberately NOT intercepted: they keep filtering through the normal doc
+   change (Ed.onUpdate -> showAc). */
 function acKeydown(g, e) {
   if (g.acEl.hidden) return;
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
@@ -7181,8 +7216,14 @@ function acKeydown(g, e) {
   } else if (e.key === "Escape") {
     e.stopPropagation();
     hideAc();
+  } else if (acKind === "m" && e.key.length === 1 && !/[\w-]/.test(e.key)) {
+    hideAc();                                   // the word ended: space, punctuation, a quote
   }
 }
+
+/* Close ONLY the mermaid list — used when the caret moves by itself
+   (arrow, click, Home/End). A [[ completion keeps its old behaviour. */
+function acMmdClose() { if (acKind === "m") hideAc(); }
 
 /* ---------- commands + keymap (target the focused group) ---------- */
 async function cmdNewNote() {                // new note in a NEW tab of the focused group

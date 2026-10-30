@@ -1369,6 +1369,9 @@ const Ed = {
       const why = MH.errText({ str: "Parse error on line 2:\n... A[Start] -->|open| (\n--------------------^\nExpecting 'X'",
                                hash: { loc: { first_line: 2 } } });
       if (!/^line 2: A\[Start\]/.test(why)) fail("mmd:err");
+      // INPUT-FLOW policy: only typed word characters, only at a statement start
+      if (!MH.wordChar("s") || MH.wordChar(" ") || MH.wordChar("\n") || MH.wordChar("]")) fail("mmd:char");
+      if (!MH.statementStart("  ") || MH.statementStart("A[") || MH.statementStart("|open| ")) fail("mmd:start");
     }
     return bad;
   },
@@ -1786,7 +1789,7 @@ Object.assign(Ed, {
       }
       Ed.sync(g);
       if (typeof scheduleSave === "function") scheduleSave(g);
-      if (typeof showAc === "function") showAc(g);
+      if (typeof showAc === "function") showAc(g, u);      // u: the hints need to know a CHARACTER was typed
       if (v._sp) { const sp = v._sp; v._sp = null; if (otel.paint) otel.paint(sp); }
       if (typeof perf !== "undefined" && perf.mark) {
         // R18 ed_patch = the JS work after ONE doc change (CM6 redraws only the
@@ -1796,6 +1799,10 @@ Object.assign(Ed, {
         perf.mark("ed_patch", t0, { lines: d.lines, patched: n, full: n >= d.lines && d.lines > 3 });
       }
     }
+    /* A caret move with no typing ENDS the hint list: arrows, Home/End, a
+       click, a search jump. (A doc change is handled above — typing keeps or
+       re-derives it, and accepting a suggestion closes it in acInsert.) */
+    if (u.selectionSet && !u.docChanged && typeof acMmdClose === "function") acMmdClose();
     if (u.selectionSet || u.docChanged) { const p = Ed.focusPos(g); Ed.mark(g, p ? p.l : -1); }
   },
   /* keys CM6 does not own: Enter (list continuation), Backspace/Delete (model

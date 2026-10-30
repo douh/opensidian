@@ -73,7 +73,16 @@
 
   const FIRST = /^\s*([A-Za-z][A-Za-z0-9-]*)/;      // the directive word of a body line
   const WORD = /[A-Za-z][A-Za-z0-9-]*$/;            // the word under the caret
+  const CHAR = /[A-Za-z0-9_-]/;                     // a character that extends a word
   const MAX = 10;                                   // the popup is a glance, not a menu
+
+  /* INPUT-FLOW policy, pure so it can be asserted: a hint appears only while
+     the user TYPES a word (main.js asks with the last doc change), and only
+     where a Mermaid statement can begin — the line start after indentation.
+     Everything else (node labels `A[Start`, edge labels `|open|`, titles, a
+     `[[` fragment) is prose, and prose gets no popup. */
+  function wordChar(ch) { return typeof ch === "string" && ch.length === 1 && CHAR.test(ch); }
+  function statementStart(before) { return /^[ \t]*$/.test(String(before == null ? "" : before)); }
 
   /* The fence around `line`, or null. Delegates the grammar to Ed.fenceAt
      (editor.js) — the SAME function the live-preview blocks and the tests use,
@@ -163,5 +172,5 @@
       .trim();
   }
 
-  window.MmdHints = { TYPES, KW, ALIAS, fenceOf, typeOf, suggest, errText };
+  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, fenceOf, typeOf, suggest, errText };
 })();

@@ -83,21 +83,50 @@ fn the_module_is_a_classic_script_loaded_before_main() {
     let m = html.find("script src=\"mermaid-syntax.js\"").expect("mermaid-syntax.js is not loaded by index.html");
     let main = html.find("script src=\"main.js\"").expect("main.js tag");
     assert!(m < main, "mermaid-syntax.js must load BEFORE main.js (showAc reads window.MmdHints)");
-    assert_has("ui/mermaid-syntax.js", &["window.MmdHints = { TYPES, KW, ALIAS, fenceOf, typeOf, suggest, errText }"]);
+    assert_has("ui/mermaid-syntax.js",
+        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, fenceOf, typeOf, suggest, errText }"]);
 }
 
 #[test]
 fn the_popup_has_a_mermaid_source() {
     assert_has("ui/main.js", &[
-        "function mmdContext(g)",
+        "function mmdContext(g, u)",
         "MH.fenceOf(",
         "if (!f || f.lang !== \"mermaid\") return null;",
         "acKind = \"m\";",
         "function paintAc(g)",
         "if (acKind === \"m\") Ed.acInsertText(g, acLine, acStart, acEnd, name);",
         // a [[ completion after a mermaid hint must fall back to the note path
-        "acStart = ctx.start; acLine = 0; acEnd = -1; acKind = \"n\";",
+        "acStart = ctx.start; acLine = 0; acEnd = -1;",
     ]);
+}
+
+#[test]
+fn the_hints_follow_typing_not_changes() {
+    // The input flow: the list opens only for a TYPED word character at the start
+    // of a statement, moves on the arrow keys, takes Enter/Tab, and ends on
+    // Escape, punctuation or a bare caret move. These seams are what make the
+    // popup usable; if any of them is dropped it degrades back to "a list that
+    // appears whenever the document changes".
+    assert_has("ui/main.js", &[
+        "function acTypedChar(u)",
+        // the flow is keyed on the transaction's origin, not on change shapes:
+        // paste, undo, redo, drag-drop and our own insertions never open a list
+        "if (!t || !t.isUserEvent(\"input.type\")) return null;",
+        "if (!ch || !MH.wordChar(ch)) return null;",
+        "if (!sug || !sug.word || !sug.items.length) return null;",
+        "if (!MH.statementStart(before)) return null;",
+        "async function showAc(g, u)",
+        "const mm = mmdContext(g, u);",
+        "function acMmdClose() { if (acKind === \"m\") hideAc(); }",
+        "} else if (acKind === \"m\" && e.key.length === 1 && !/[\\w-]/.test(e.key)) {",
+    ]);
+    assert_has("ui/editor.js", &[
+        "if (typeof showAc === \"function\") showAc(g, u);",
+        "if (u.selectionSet && !u.docChanged && typeof acMmdClose === \"function\") acMmdClose();",
+    ]);
+    // and the policy itself is pure, so selfTest proves it on every launch
+    assert_has("ui/editor.js", &["fail(\"mmd:char\")", "fail(\"mmd:start\")"]);
 }
 
 #[test]

@@ -177,14 +177,15 @@ cargo test --locked
 
 围栏内写图时，两件事有提示：**能写什么**（补全）与**哪儿写错了**（解析错误）。两者共用一份知识源 `ui/mermaid-syntax.js`（普通 `<script>`，在 `main.js` 之前加载），不新增任何 vendored 包——`@codemirror/autocomplete` 与 `@codemirror/lint` 虽已随 `ui/vendor/codemirror/cm6.js` 存在，但 app 的补全一直是自研弹窗（`[[` 链接就是它），再用一套 CM6 扩展只会多出一条并行路径。
 
-- **补全**：光标在 ` ```mermaid ` 围栏内时，`main.js` 的 `mmdContext(g)` 把"围栏哪一行开始/结束、图型是哪一个、正在打的词"算出来，交给既有的 `showAc`/`paintAc` 弹窗（`acKind === "m"`）。围栏头空词列出 26 种图型，`flowchart`/`graph`/`sequenceDiagram` 等之后列出该图型的关键字；`%%` 注释行不弹。选中项经 `Ed.acInsertText` 走编辑器模型替换词本身（一次撤销、同脏标记），不展开模板。
+- **补全（输入流，不是"文档变了就弹"）**：`Ed.onUpdate` 把本次更新交给 `showAc(g, u)`；`acTypedChar(u)` 先看 CM6 给这次事务打的来源标注，**只有 `input.type` 才算打字**——粘贴、撤销、拖放、程序化插入一律不弹，所以不用去猜"这次改动像不像打字"。随后 `mmdContext(g, u)` 过三道闸：围栏（`fenceOf` 委托 `Ed.fenceAt`，与渲染器同一函数）、位置（`statementStart`：这个词必须从行首缩进后开始，节点标签 `A[Start`、边文本 `|open|`、标题里一律不弹）、词表（`suggest`，按前缀过滤，26 种图型或该图型关键字；`%%` 注释行不弹）。快打时两个字符可能并进一次事务，取最后一个字符判断即可，列表照常出现。
+- **键位**：列表打开时 ↑/↓ 只移选择（光标不动）、Enter/Tab 取用、Esc 关闭、其余可打印键（空格/标点/引号）先关列表再落到编辑器——下一个键永远是用户想按的那个；取用经 `Ed.acInsertText` 走编辑器模型（行锚定、一次撤销、同脏标记），光标停在词尾，不展开模板。光标自己移动（方向键、点击、Home/End）由 `acMmdClose` 关列表；`[[` 补全的行为不变。
 - **错误**：解析失败时阅读视图与 Live Preview **都**保留源码，并在下面追加一行解析器自己的话（`MmdHints.errText` 把 jison 的 `Parse error on line N: … Expecting …` 压成一行，行号只取自 `hash.loc`，不臆造）。空盒是绝不会出现的失败形态。
 - **真实性**：`HINTS-BEGIN/HINTS-END` 之间的每个字符串都是"词表声明"，`src-tauri/tests/mermaid_hints.rs` 逐条在 `ui/vendor/mermaid/mermaid.min.js` 里查存在——提议 Mermaid 会拒绝的语法比不提更糟。因此 `zenuml`（11.17.2 的解析图里没有该 parser）与 ER 基数符号（压缩后的 lexer 由碎片拼出，无字面量可查）**故意不收**。
 - **自检**：纯函数的场景挂在 `Ed.selfTest()` 里，启动即在真机跑一遍，失败会以 `[edt:mmd:…]` 出现在窗口标题（正常是 `[edt:ok]`）；探针另有 `[mmd:n:首个候选]` 与 `[mmderr:一行错误]` 两个 census token。
 
-真机验证（macOS 探针，非自动化测试）：围栏内输入 `subg` 弹出唯一候选 `subgraph`，回车插入并落盘；空词弹出 8 条 flowchart 关键字；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`。
+真机验证（macOS 探针，非自动化测试，输入法切 ABC 后按键才不被候选栏截走）：围栏内打 `b`（接在 `sub` 后）弹出唯一候选 `subgraph`，Enter 取用后落盘；一次 `keystroke` 连发 `su`（并批）同样弹出；空格落下且列表当场关闭、此时 Enter 才是换行；Esc 关闭；粘贴 `xy` 与在 `A[Open] --> B` 这一行中段打 ` e` 都**不**弹；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`。
 
-合并姿态：上游若自带补全，**取上游**的弹窗与词表，我们只把 `errText` 那行错误说明与 `.mmderr` 样式作为小补丁加回；若上游不做，这整块原样保留（`mermaid_hints.rs` 的 8 条断言保证它不会被某次重构顺手删掉）。
+合并姿态：上游若自带补全，**取上游**的弹窗与词表，我们只把 `errText` 那行错误说明与 `.mmderr` 样式作为小补丁加回；若上游不做，这整块原样保留（`mermaid_hints.rs` 的 9 条断言保证它不会被某次重构顺手删掉）。
 
 ## 许可
 
