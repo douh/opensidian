@@ -2,9 +2,11 @@
 
 # Opensidian · macOS fork 说明
 
-`douh/opensidian` 是 [jpzk/opensidian](https://github.com/jpzk/opensidian) 的 macOS 取向 fork。
+`douh/opensidian` 与 [jpzk/opensidian](https://github.com/jpzk/opensidian) 是**共生**关系，不是简单的 fork：上游是宿主，提供 Linux 优先的实现、文件格式与规则；本仓库是 macOS 共生层，提供打包、App Sandbox、本地化与只读 MCP。两边各自演化、互不吞并，边界与契约写在 [`PRERULES.md`](PRERULES.md) §0。
 
 **为什么单独一个文件。** `README.md` 与上游**逐字一致**（任何时候 `git diff origin/main -- README.md` 都应为空），所以上游改 README 时不会产生合并冲突。fork 自己的说明——macOS 打包与签名、App Sandbox、界面语言、只读 MCP 服务器——全部写在这里。要加 fork 专属文字，请加在本文件，不要加回 `README.md`。
+
+**规则也是同样的分层。** `AGENTS.md` 与上游**逐字一致**（`git diff origin/main -- AGENTS.md` 应为空）；fork 自己的规则写在 [`PRERULES.md`](PRERULES.md)——文档分层、想法 → 架构 → 提案的三阶段、macOS 平台与 App Sandbox、MCP 只读边界。动手之前先读它，再读 `AGENTS.md`。想法稿 `IDEA-*.md` 与计划 `PLAN-*.md` 只留本地（`.git/info/exclude`），永不提交。
 
 上游 README 里的 Linux 安装包、`SHA256SUMS` 与其 GPG 签名都来自上游，本 fork 不发布任何签名构建；macOS 请按下文从源码构建。
 
@@ -139,6 +141,8 @@ cargo test --locked        # src-tauri/
 ```
 
 大改动的上游合并建议先在临时 worktree 里试合、解决冲突、跑测试，验证后再 `git merge --ff-only` 合入 `macos`。
+
+**回流。** 共生层里与平台无关、对上游也有价值的部分（macOS 的 syscall 映射、`host_js`、界面语言、Live Preview 的围栏与 Mermaid 渲染）以 PR 提交上游；上游不接也照常自用。回流只动代码与测试，**不动** `README.md` 与 `AGENTS.md`——这两份的逐字一致本身就是回流的礼貌。上游改动合并后，跑一遍 `PRERULES.md` §4 的共生自检，确认共生层引用的上游符号还活着。
 
 ## 许可
 
