@@ -8,7 +8,7 @@
 
 **规则也是同样的分层。** `AGENTS.md` 与上游**逐字一致**（`git diff origin/main -- AGENTS.md` 应为空）；fork 自己的规则写在 [`PRERULES.md`](PRERULES.md)——文档分层、想法 → 架构 → 提案的三阶段、macOS 平台与 App Sandbox、MCP 只读边界。动手之前先读它，再读 `AGENTS.md`。想法稿 `IDEA-*.md` 与计划 `PLAN-*.md` 只留本地（`.git/info/exclude`），永不提交。
 
-上游 README 里的 Linux 安装包、`SHA256SUMS` 与其 GPG 签名都来自上游，本 fork 不发布任何签名构建；macOS 请按下文从源码构建。
+上游 README 里的 Linux 安装包、`SHA256SUMS` 与其 GPG 签名都来自上游；本 fork **不发布任何二进制**（GitHub Releases 留空，只有源码），macOS 请按下文从源码构建。
 
 ## 这个 fork 改了什么
 
@@ -22,7 +22,7 @@
 
 ## 安装
 
-本 fork 不发布签名构建：仓库里没有签名密钥，也不由代理持有（`AGENTS.md` 的 *Releases*）。默认构建出的 `.app` 与 `.dmg` 是 ad-hoc 签名，可以在**构建它的这台机器**上直接运行；拷贝到别的机器会被 Gatekeeper 拦下。要让安装包能发给别人，用自备的 Developer ID 走一遍签名 + 公证（脚本已就位，见下文「分发：Developer ID 与公证」）。
+本 fork 暂不发布二进制安装包：GitHub Releases 留空，分发的是源码，`.app` 与 `.dmg` 请自己构建。仓库里也没有签名密钥，也不由代理持有（`AGENTS.md` 的 *Releases*）。默认构建出的 `.app` 与 `.dmg` 是 ad-hoc 签名，可以在**构建它的这台机器**上直接运行；拷贝到别的机器会被 Gatekeeper 拦下。要让安装包能发给别人，用自备的 Developer ID 走一遍签名 + 公证（脚本已就位，见下文「分发：Developer ID 与公证」）。
 
 ```sh
 cp -R src-tauri/target/macos/Opensidian.app /Applications/
