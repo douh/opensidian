@@ -8,11 +8,16 @@
 # launch: a bundle with Contents/MacOS/opensidian, an Info.plist and an .icns.
 # Ad-hoc signing (-) is enough to run it on this machine; a copy that travels
 # still needs Developer ID + notarisation, which agents never hold (AGENTS.md,
-# "Releases").
+# "Releases").  An identity in the login keychain turns the same bundle into
+# something that can be notarised: set OPENSIDIAN_SIGN_ID to it, then run
+# packaging/macos/make-dmg.sh (which signs, notarises and staples).
 #
 #   packaging/macos/make-app.sh          build, then bundle into
 #                                        src-tauri/target/macos/Opensidian.app
 #   OPENSIDIAN_SKIP_BUILD=1 ...          reuse an existing target/release binary
+#   OPENSIDIAN_SIGN_ID="Developer ID Application: … (TEAMID)"
+#                                        sign with that identity instead of -
+#                                        (hardened runtime + secure timestamp)
 #
 # The icon comes from the same SVG-derived PNGs the Linux packages use, so the
 # app looks identical on both platforms and no new artwork enters the tree.
@@ -28,6 +33,24 @@ out="$root/src-tauri/target/macos/Opensidian.app"
 icons="$root/packaging/linux/icons"
 version=$(sed -n 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$root/src-tauri/tauri.conf.json" | head -1)
 [ -n "$version" ] || { echo "no version in src-tauri/tauri.conf.json" >&2; exit 1; }
+
+# Resolve the signing identity BEFORE anything is deleted: a mistyped name must
+# not cost the working bundle that is already there.
+sign_id="-"
+dist=0
+if [ -n "${OPENSIDIAN_SIGN_ID:-}" ]; then
+    sign_id=$OPENSIDIAN_SIGN_ID
+    dist=1
+    if ! security find-identity -v -p codesigning | grep -F -- "$sign_id" >/dev/null 2>&1; then
+        echo "OPENSIDIAN_SIGN_ID is not a usable codesigning identity: $sign_id" >&2
+        echo "installed identities (security find-identity -v -p codesigning):" >&2
+        security find-identity -v -p codesigning >&2
+        echo "Build a Developer ID Application certificate in your Apple developer" >&2
+        echo "account and import it into the login keychain, or unset the variable" >&2
+        echo "to fall back to the ad-hoc signature (this machine only)." >&2
+        exit 1
+    fi
+fi
 
 if [ "${OPENSIDIAN_SKIP_BUILD:-}" != 1 ]; then
     echo "==> cargo build --release --locked"
@@ -100,18 +123,38 @@ cat > "$out/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature WITH the App Sandbox entitlements: without any signature
-# Apple Silicon refuses to launch the bundle at all, and the entitlements
+# Signature WITH the App Sandbox entitlements: without any signature Apple
+# Silicon refuses to launch the bundle at all, and the entitlements
 # (packaging/macos/Opensidian.entitlements) are what put the process in the
 # sandbox: writes stay in ~/Library/Containers/dev.koto.opensidian and a vault
 # folder is reachable only through the folder panel's grant (sandbox_mac.rs).
-# It is NOT a distribution signature — see the header.
+# Ad-hoc ("-") runs on this machine only. A Developer ID identity (hardened
+# runtime + secure timestamp) is what notarisation needs — see the header.
 ent="$root/packaging/macos/Opensidian.entitlements"
+
 # the MCP helper is signed FIRST and WITHOUT the entitlements: an MCP client
 # starts it directly, it inherits nothing from us, and it must be able to read the
 # vault folder it is given. Signing it inside the app afterwards would seal it
 # with sandbox entitlements and it could no longer open the vault.
-codesign --force --sign - "$out/Contents/MacOS/opensidian-mcp" >/dev/null 2>&1 || echo "warning: ad-hoc codesign of opensidian-mcp failed" >&2
-codesign --force --sign - --entitlements "$ent" "$out" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed; launch may be refused on arm64" >&2
+if [ "$dist" = 1 ]; then
+    echo "==> signing with $sign_id (hardened runtime, secure timestamp)"
+    codesign --force --timestamp --options runtime --sign "$sign_id" \
+        "$out/Contents/MacOS/opensidian-mcp" \
+        || { echo "codesign of opensidian-mcp failed" >&2; exit 1; }
+    codesign --force --timestamp --options runtime --sign "$sign_id" \
+        --entitlements "$ent" "$out" \
+        || { echo "codesign of Opensidian.app failed" >&2; exit 1; }
+else
+    codesign --force --sign - "$out/Contents/MacOS/opensidian-mcp" >/dev/null 2>&1 || echo "warning: ad-hoc codesign of opensidian-mcp failed" >&2
+    codesign --force --sign - --entitlements "$ent" "$out" >/dev/null 2>&1 || echo "warning: ad-hoc codesign failed; launch may be refused on arm64" >&2
+fi
+
+# The entitlements are the sandbox; losing them silently would be worse than a
+# hard failure, so check them right where they were applied.
+if codesign --verify --deep --strict "$out" >/dev/null 2>&1; then
+    echo "==> signature verified ($sign_id)"
+else
+    echo "warning: codesign --verify failed; launch may be refused" >&2
+fi
 
 echo "==> $out ($version)"

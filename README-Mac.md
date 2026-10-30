@@ -14,7 +14,7 @@
 
 | 方向 | 内容 |
 |---|---|
-| macOS 打包 | `packaging/macos/make-app.sh` 产出 `src-tauri/target/macos/Opensidian.app`（ad-hoc 签名、App Sandbox、原生标题栏与红绿灯按钮） |
+| macOS 打包 | `packaging/macos/make-app.sh` 产出 `src-tauri/target/macos/Opensidian.app`（ad-hoc 签名、App Sandbox、原生标题栏与红绿灯按钮）；`make-dmg.sh` 再出安装镜像，给了 Developer ID 与公证凭据时一并签名、公证、staple |
 | 界面语言 | 英文 / 简体中文，跟随系统；设置、命令面板、热键页、状态栏等界面文案已本地化 |
 | MCP | `.app` 内含只读的 `opensidian-mcp`（stdio），供任意本地 MCP 客户端读取仓库 |
 | 渲染 | 阅读视图的代码高亮、Mermaid 与公式，以及 Live Preview 里的围栏块；` ```mermaid ` 围栏内还有语法提示与解析错误提示（上游尚未实现，见下文「补全」与「Mermaid」两节） |
@@ -22,7 +22,7 @@
 
 ## 安装
 
-本 fork 不发布签名构建，也没有公证（notarisation）。本地构建出的 `.app` 是 ad-hoc 签名，可以在**构建它的这台机器**上直接运行；拷贝到别的机器仍会被 Gatekeeper 拦下，需要 Developer ID 与公证，而签名密钥不在仓库里，也不由代理持有。
+本 fork 不发布签名构建：仓库里没有签名密钥，也不由代理持有（`AGENTS.md` 的 *Releases*）。默认构建出的 `.app` 与 `.dmg` 是 ad-hoc 签名，可以在**构建它的这台机器**上直接运行；拷贝到别的机器会被 Gatekeeper 拦下。要让安装包能发给别人，用自备的 Developer ID 走一遍签名 + 公证（脚本已就位，见下文「分发：Developer ID 与公证」）。
 
 ```sh
 cp -R src-tauri/target/macos/Opensidian.app /Applications/
@@ -50,13 +50,58 @@ packaging/macos/make-app.sh         # -> src-tauri/target/macos/Opensidian.app
 OPENSIDIAN_SKIP_BUILD=1 packaging/macos/make-app.sh   # 复用已有 target/release 二进制
 ```
 
-需要安装镜像时：
+需要安装镜像时（卷内是 `.app` 加一个 `/Applications` 快捷方式，拖一下就装）：
 
 ```sh
-hdiutil create -volname Opensidian -srcfolder Opensidian.app -ov -format UDZO Opensidian.dmg
+packaging/macos/make-dmg.sh                          # -> src-tauri/target/macos/Opensidian-<version>-macos-<arch>.dmg
+OPENSIDIAN_SKIP_BUILD=1 packaging/macos/make-dmg.sh  # 复用已有 target/release 二进制
+OPENSIDIAN_SKIP_APP=1 packaging/macos/make-dmg.sh    # 连 .app 也复用（版本必须与 tauri.conf.json 一致）
 ```
 
+文件名里的版本取自 `src-tauri/tauri.conf.json`，因为**设置 ▸ 通用 ▸ 检查更新**是从文件名（`src-tauri/src/updates.rs::scan_dir` 的 `Opensidian-<version>-*.dmg`）读出本地构建的版本的，改名会让它认不出这个包。
+
 构建细节：`src-tauri/tauri.macos.conf.json` 打开 `decorations` 并用 `titleBarStyle: Overlay`，所以关闭/最小化/缩放是真实的红绿灯，页面内容延伸到标题栏下方（`ui/style.css` 在 `body.mac` 下隐藏 Linux 自绘的窗口条与缩放角）。红绿灯所在的那条 28px 空白带（`.app-container` 的 `padding-top`）就是窗口标题栏：拖它移动窗口，双击它把窗口铺满可见屏幕（macOS 的 zoom，等价于系统「双击标题栏」，不是全屏）——开满标签、每个窗格标题条都被占满时，这条带仍然可用（`ui/main.js` 的 `wfMacBand`/`wfBandPx`；带高从 CSS 读取，两处不会各写一个 28）。插件看到的宿主也是真实的：`os.platform()` 与 `process.platform` 回答 `darwin`，架构为 `arm64`/`x64`，而不是硬编码的 `linux`。
+
+## 分发：Developer ID 与公证
+
+两个脚本把「能在这台机器跑」和「能发给别人」分开，并且**不会假装**后者已经做到：缺证书或缺凭据时，它们照常产出 ad-hoc 构建，然后在最后一行说明这个包只在本机可用。
+
+需要的三样东西都在你自己的钥匙串 / Apple 开发者账号里，**不进仓库、不写进脚本**（`AGENTS.md` 的 *Releases*）：
+
+| 东西 | 从哪来 | 用在哪 |
+|---|---|---|
+| Developer ID Application 证书 | Apple 开发者账号 → Certificates → 导入登录钥匙串 | `OPENSIDIAN_SIGN_ID`（`security find-identity -v -p codesigning` 里带 `Developer ID Application: 名字 (TEAMID)` 的那一行） |
+| 公证凭据 | `xcrun notarytool store-credentials <名字>`，只做一次 | `OPENSIDIAN_NOTARY_PROFILE`（钥匙串里的 profile 名） |
+| 或者 Apple ID 三件套 | App Store Connect 的 app-specific password | `OPENSIDIAN_NOTARY_APPLE_ID` / `_TEAM_ID` / `_PASSWORD`（密码建议写 `@keychain:项名`，免得出现在 `ps` 里） |
+
+```sh
+xcrun notarytool store-credentials os-notary \
+    --apple-id "you@example.com" --team-id "TEAMID" --password "@keychain:AC_PASSWORD"
+
+OPENSIDIAN_SIGN_ID="Developer ID Application: Your Name (TEAMID)" \
+OPENSIDIAN_NOTARY_PROFILE=os-notary \
+packaging/macos/make-dmg.sh
+```
+
+脚本做的事，顺序固定（每一步失败都会停下，不会带着半个结果往下走）：
+
+1. `make-app.sh` 用 Developer ID 签两个二进制——先 `opensidian-mcp`（**不带** entitlements，它必须能读外部 vault），再整个 bundle（带 App Sandbox entitlements），都加 `--options runtime --timestamp`；
+2. 把 `.app` 打成 zip 送公证，Accepted 后 `stapler staple` 到 `.app` 本身——这样用户从 DMG 里拖到 `/Applications` 的那份，离线首启也能过 Gatekeeper；
+3. 生成 `Opensidian-<version>-macos-<arch>.dmg`（`.app` + `/Applications` 快捷方式，UDZO 只读卷），用同一身份签 DMG；
+4. DMG 再送一次公证、Accepted 后 staple 到 DMG；
+5. 打印 `hdiutil verify`、`stapler validate` 与 Gatekeeper 自己的判定（`spctl -a -t open --context context:primary-signature -vv`）、`shasum -a 256`。
+
+两次公证（app 与 dmg）而不是一次，是为了让「从 DMG 里拷出来的 app」和「DMG 本身」各自都有 ticket；只公证 DMG 时，被拷出来的 app 首次离线启动仍会被拦。`OPENSIDIAN_NO_NOTARIZE=1` 明确跳过公证，只签名出镜像。
+
+验证一个已经发出的包（在任何一台 Mac 上）：
+
+```sh
+spctl -a -t open --context context:primary-signature -vv Opensidian-0.9.0-macos-arm64.dmg   # accepted / source=Notarized Developer ID
+xcrun stapler validate Opensidian-0.9.0-macos-arm64.dmg
+codesign -dv --verbose=4 /Applications/Opensidian.app                                      # Authority=Developer ID Application …，flags 含 runtime
+```
+
+ad-hoc 构建（不带 `OPENSIDIAN_SIGN_ID`）的预期结果是 `spctl` 报 `rejected`——这是未签名分发的正常回答，不是打包失败。
 
 ## App Sandbox
 
