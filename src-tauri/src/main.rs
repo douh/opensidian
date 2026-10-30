@@ -11221,6 +11221,41 @@ mod tests {
             css.contains("#wframe button:focus"),
             "ui/style.css lost the focus ring on the window controls: keyboard focus nobody can see is not operable (R33.9)"
         );
+        /* macOS: THE BAND IS THE TITLE BAR, and it is a THREE-PART coupling that
+           fails silently if any one part moves alone:
+             1. the config: decorations + the overlay title bar (that is what puts
+                the page under the traffic lights, and what leaves no #wframe);
+             2. the CSS: the 28px band the chrome is lifted by — the padding IS the
+                gesture's target, and a band of 0 means no title bar at all;
+             3. the JS: the press handler must accept that band (`wfMacBand`) and
+                read its height from the SAME padding (`wfBandPx`), never a
+                hardcoded 28 in two places.
+           Losing (3) is the reported bug — a window whose every pane header is
+           filled with tabs had no press target left for the double press that
+           fits it to the screen (macOS zoom, via win_toggle_max), so the one
+           gesture the system's own title bar offers did not exist here.
+           Verified on the built app: double press in the band -> [wfm:1] at the
+           visible frame (1728x1040@0,33 from 1100x700@314,118), double press
+           again -> back to 1100x700@314,118, and a drag from the band reports
+           [wfg:move:314,118,1100,700+0,80]. */
+        let mac = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/tauri.macos.conf.json")).unwrap();
+        let mac: serde_json::Value = serde_json::from_str(&mac).unwrap();
+        assert_eq!(mac["app"]["windows"][0]["decorations"], serde_json::json!(true),
+            "tauri.macos.conf.json must re-enable decorations: the macOS window is the system's");
+        assert_eq!(mac["app"]["windows"][0]["titleBarStyle"], serde_json::json!("Overlay"),
+            "tauri.macos.conf.json lost the overlay title bar — without it the page does not run under the lights and there is no band");
+        assert!(
+            css.contains("body.mac .app-container { padding-top: 28px }"),
+            "ui/style.css lost the macOS band: it is the title bar's press target, not decoration (wfMacBand reads this padding)"
+        );
+        assert!(
+            js.contains("wfDragRegion(ev.target) || wfMacBand(ev)"),
+            "ui/main.js no longer treats a press in the macOS band as a title-bar press — double click there would fit nothing to the screen"
+        );
+        assert!(
+            js.contains("getComputedStyle(c).paddingTop"),
+            "wfBandPx must read the band from CSS (the app-container padding), never a second hardcoded 28"
+        );
     }
 
     // ---------- tabclose: the instrumentation cannot drift ----------

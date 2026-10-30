@@ -55,7 +55,7 @@ OPENSIDIAN_SKIP_BUILD=1 packaging/macos/make-app.sh   # 复用已有 target/rele
 hdiutil create -volname Opensidian -srcfolder Opensidian.app -ov -format UDZO Opensidian.dmg
 ```
 
-构建细节：`src-tauri/tauri.macos.conf.json` 打开 `decorations` 并用 `titleBarStyle: Overlay`，所以关闭/最小化/缩放是真实的红绿灯，页面内容延伸到标题栏下方（`ui/style.css` 在 `body.mac` 下隐藏 Linux 自绘的窗口条与缩放角）。插件看到的宿主也是真实的：`os.platform()` 与 `process.platform` 回答 `darwin`，架构为 `arm64`/`x64`，而不是硬编码的 `linux`。
+构建细节：`src-tauri/tauri.macos.conf.json` 打开 `decorations` 并用 `titleBarStyle: Overlay`，所以关闭/最小化/缩放是真实的红绿灯，页面内容延伸到标题栏下方（`ui/style.css` 在 `body.mac` 下隐藏 Linux 自绘的窗口条与缩放角）。红绿灯所在的那条 28px 空白带（`.app-container` 的 `padding-top`）就是窗口标题栏：拖它移动窗口，双击它把窗口铺满可见屏幕（macOS 的 zoom，等价于系统「双击标题栏」，不是全屏）——开满标签、每个窗格标题条都被占满时，这条带仍然可用（`ui/main.js` 的 `wfMacBand`/`wfBandPx`；带高从 CSS 读取，两处不会各写一个 28）。插件看到的宿主也是真实的：`os.platform()` 与 `process.platform` 回答 `darwin`，架构为 `arm64`/`x64`，而不是硬编码的 `linux`。
 
 ## App Sandbox
 

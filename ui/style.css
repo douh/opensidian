@@ -1732,6 +1732,12 @@ body.floorrelayout #main { padding-right: 1px }
    than removed: the Linux build still needs both. The chrome sits below a 28px
    band, because the lights hang over the window's top-left corner and the ribbon
    (full-height, at x=0) would otherwise put its first button underneath them.
+   THE BAND IS ALSO THE TITLE BAR, not just clearance: it is the one press target
+   that survives a window whose every pane header is filled with tabs, so
+   ui/main.js reads this padding (wfBandPx) and treats a press in it as a title-
+   bar press — drag moves the window, double press fits it to the screen (macOS
+   zoom). Do not "tidy" the padding away: a band of 0 deletes the gesture, and
+   nothing else in the page would notice.
    With no strip covering the right corner any more, the .wfinset right
    reservation goes back to zero instead of leaving a dead gap. */
 body.mac #wframe, body.mac #wrz { display: none }

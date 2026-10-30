@@ -12819,6 +12819,40 @@ function wfDragRegion(t) {    // is this event target part of the drag region?
   // R37: ANY pane's tab-bar background, not just the top row's (see the block above)
   return t.classList.contains("tabbar") || t.classList.contains("tabs");
 }
+/* MACOS: THE BAND ABOVE THE CHROME IS THE WINDOW'S ONE RELIABLE TITLE BAR.
+   tauri.macos.conf.json re-enables decorations with the overlay title bar, so the
+   page runs under the native traffic lights and ui/style.css lifts the chrome by
+   28px (`body.mac .app-container { padding-top: 28px }`). That band IS the
+   window's title bar, and it is the press target that SURVIVES a window whose
+   every pane header is filled with tabs — the case the pane-header gesture
+   cannot serve, because there is no empty .tabs background left to press.
+   Without this it did nothing: the webview covers the native title bar, so
+   AppKit's own double-click-title-bar gesture never sees the press, and no
+   .tabbar exists up there for wfDragRegion.
+   A press there therefore takes the SAME gesture as a pane header: a drag moves
+   the window (wfBegin "move", win_rect anchor + cursor delta), and the double
+   press wfBegin already detects is the window's fit-to-screen. On macOS that is
+   really `-[NSWindow zoom:]` — tao's set_maximized calls it for a resizable
+   titled window ("Just use the native zoom", util/macos/async.rs) — i.e. exactly
+   the system's double-click-title-bar behaviour, NOT fullscreen and NOT a
+   custom maximised rect.
+   The band's height is READ from the CSS, never assumed: it IS the padding, so a
+   theme or snippet that moves the chrome takes the gesture with it. */
+function wfBandPx() {
+  if (!IS_MAC) return 0;
+  const c = document.querySelector(".app-container");
+  return c ? (parseFloat(getComputedStyle(c).paddingTop) || 0) : 0;
+}
+function wfMacBand(ev) {
+  if (!IS_MAC) return false;
+  const t = ev.target;
+  // the band is .app-container's own padding, so nothing else can be its target;
+  // a scrim or dialog that covers it (#modal, #picker, #settings: inset 0) is
+  // its own target and is deliberately EXCLUDED — a modal must keep its clicks.
+  if (!t || !t.classList || !t.classList.contains("app-container")) return false;
+  const band = wfBandPx();
+  return band > 0 && ev.clientY < band;
+}
 /* R37 census [hdr:<i>@<free>/<tab0>/<modebtn>|...] — one entry per pane, in
    document order, every field an `x,y` CENTRE in CLIENT px (add the window's
    outer origin to get the screen point xdotool needs), `-` when that thing does
@@ -13012,8 +13046,11 @@ function wfArm() {
   for (const g of document.querySelectorAll("#wrz i"))
     g.addEventListener("pointerdown", ev => wfBegin(g.dataset.d, ev, g));
   // capture phase: the press must be claimed before a tab bar handler sees it,
-  // and ONLY when it landed on the background (a tab is its own target)
-  addEventListener("pointerdown", ev => { wfEv.dn++; if (wfDragRegion(ev.target)) wfBegin("move", ev, ev.target); }, true);
+  // and ONLY when it landed on the background (a tab is its own target).
+  // wfMacBand covers the macOS case with NO tab-bar background left: the band
+  // above the chrome is the title bar there (see its comment), and a double press
+  // on it must still fit the window to the screen.
+  addEventListener("pointerdown", ev => { wfEv.dn++; if (wfDragRegion(ev.target) || wfMacBand(ev)) wfBegin("move", ev, ev.target); }, true);
   addEventListener("pointermove", ev => { if (ev.buttons) wfEv.mvb++; wfDrag(ev); }, true);
   addEventListener("pointerup", ev => { wfEv.up++; wfEnd(ev); }, true);
   addEventListener("pointercancel", ev => { wfEv.cx++; wfEnd(ev); }, true);
@@ -13089,7 +13126,11 @@ function wfTok() {
   const g = document.querySelectorAll("#wrz i").length;
   const a = document.activeElement;
   const k = a && a.id && a.id.indexOf("wf-") === 0 ? a.id : "-";
-  return " [wf:" + b + (wfArmed ? "d" : "-") + g + "] [wfm:" + (wfMax ? 1 : 0) + "] [wfk:" + k + "] [wfg:" + wfLast + "] [wfl:" + wfLogA.join(">") + "] [wfp:" + wfProto + "] [wfd:" + wfEv.dn + "," + wfEv.up + "," + wfEv.cx + "," + wfEv.lc + "," + wfEv.mvb + "] [hdr:" + wfHdrTok() + "] [hdra:" + hdrActTok() + "]";
+  // [wfb:] = the macOS title band in px (the app-container padding the gesture
+  // reads), "-" on a host that has no band. A phase can assert the gesture has a
+  // target up there, instead of inferring it from a double press that happened
+  // to land on a pane header instead.
+  return " [wf:" + b + (wfArmed ? "d" : "-") + g + "] [wfb:" + (wfBandPx() || "-") + "] [wfm:" + (wfMax ? 1 : 0) + "] [wfk:" + k + "] [wfg:" + wfLast + "] [wfl:" + wfLogA.join(">") + "] [wfp:" + wfProto + "] [wfd:" + wfEv.dn + "," + wfEv.up + "," + wfEv.cx + "," + wfEv.lc + "," + wfEv.mvb + "] [hdr:" + wfHdrTok() + "] [hdra:" + hdrActTok() + "]";
 }
 wfArm();
 
