@@ -1118,24 +1118,6 @@ const Ed = {
     return true;
   },
   rvEnd(g) { if (g && g.view) g.view.rvSess = null; },
-  // [[ autocomplete: replace [start, caret) with [[name]] through the model
-  acInsert(g, start, name) {
-    const s = Ed.sel(g);
-    if (!s) return;
-    const L = Ed.lines(g), l = s.b.l, line = L[l];
-    const a = line.lastIndexOf("[[", s.b.c);
-    if (a < 0) return;
-    Ed.replace(g, { a: { l, c: a }, b: { l, c: s.b.c }, empty: false }, "[[" + name + "]]", "ac");
-  },
-  /* mermaid hints (ui/main.js mmdContext): replace the column range [c0,c1) on
-     line l with a plain word, through the model — same undo entry, same dirty
-     flag and same save path as typing it. Anchored on the line (not on a
-     field offset) for the reason acInsert above learned first. */
-  acInsertText(g, l, c0, c1, text) {
-    Ed.replace(g, { a: { l, c: Math.max(0, c0) }, b: { l, c: Math.max(0, c1) }, empty: false },
-      String(text == null ? "" : text), "ac");
-    return true;
-  },
   linkClick(e, a) {
     if (typeof wikiClick === "function") wikiClick(e, a);
   },
@@ -1345,13 +1327,16 @@ const Ed = {
         if (eg.view.lines.join("\n") !== want) fail("sel-tab:" + src);
       }
     } finally { Ed.after = oa; Ed.snap = on; }
-    /* Mermaid hints (ui/mermaid-syntax.js). The DATA (diagram names, keywords)
-       is asserted against the vendored bundle by tests/mermaid_hints.rs; what
-       runs here is the pure machinery, on every load, so a broken helper shows
-       up in the title as [edt:mmd:...] instead of waiting for someone to type
-       a fence. `fenceOf` walks the real Ed.fenceAt, so this also proves the
-       completer and the renderer agree on what a mermaid block is. */
-    const MH = window.MmdHints;
+    /* Mermaid hints + the hint ENGINE. The DATA (diagram names, keywords) is
+       asserted against the vendored bundle by tests/mermaid_hints.rs, the
+       engine's seams by tests/hint_engine.rs; what runs here is the real
+       machinery, on every launch, so a broken helper or a broken state machine
+       shows up in the title as [edt:hint:...] instead of waiting for someone
+       to type a fence. `fenceOf` walks the real Ed.fenceAt, so this also proves
+       the completer and the renderer agree on what a mermaid block is. The
+       engine is driven on a fake host: the same code the panes run, with no
+       view, no vault, no waiting. */
+    const MH = window.MmdHints, HC = window.HintCore;
     if (!MH) fail("mmd:absent");
     else {
       const dt = ["```mermaid", "flowchart TD", "  A --> B", "```", "", "```js", "x", "```"];
@@ -1372,16 +1357,95 @@ const Ed = {
       // INPUT-FLOW policy: only typed word characters, only at a statement start
       if (!MH.wordChar("s") || MH.wordChar(" ") || MH.wordChar("\n") || MH.wordChar("]")) fail("mmd:char");
       if (!MH.statementStart("  ") || MH.statementStart("A[") || MH.statementStart("|open| ")) fail("mmd:start");
+      // the span the provider replaces is the word, read the same way twice
+      const wa = MH.wordAt("  sub");
+      if (!wa || wa.word !== "sub" || wa.from !== 2 || MH.wordAt("  ") !== null) fail("mmd:word");
+    }
+    /* The ENGINE (ui/hint-core.js), driven on a fake host: the input flow the
+       popup promises, proven at launch. */
+    if (!HC) fail("hint:absent");
+    else {
+      if (HC.SETTINGS_KEY !== "os.hints") fail("hint:key");
+      if (HC.MODES.join(",") !== "auto,manual,off") fail("hint:modes");
+      const host = (src, l, c) => {
+        const L = Array.isArray(src) ? src.slice() : String(src).split("\n");
+        let at = { l, c }; const did = [];
+        return {
+          did, lines: () => L, text: () => L.join("\n"), caret: () => at,
+          fenceAt: (l0, ls) => (MH ? MH.fenceOf({ line: i => ({ text: ls[i - 1] || "" }) }, l0 + 1, ls.length) : null),
+          notes: () => ["Welcome", "Alpha"], current: () => "Home",
+          readNote: n => (n === "Alpha" ? "## Intro\nbody ^blk-id\n" : ""),
+          heads: t => (String(t).match(/^## (.+)$/gm) || []).map(x => ({ text: x.slice(3), level: 2, line: 0 })),
+          rank: (q, s) => (q && String(s).toLowerCase().indexOf(String(q).toLowerCase()) < 0 ? -1 : 0),
+          put(p) { at = { l: p.l, c: p.c }; },
+          type(ch) { L[at.l] = L[at.l].slice(0, at.c) + ch + L[at.l].slice(at.c); at = { l: at.l, c: at.c + ch.length }; },
+          replace: (r, t) => {                      // the model, one line, like the host's Ed.replace
+            did.push({ l: r.l, from: r.from, to: r.to, text: t });
+            L[r.l] = L[r.l].slice(0, r.from) + t + L[r.l].slice(r.to);
+            at = { l: r.l, c: r.from + t.length };
+          },
+        };
+      };
+      const en = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "auto" });
+      en.host.type("b"); en.sense({ typed: "b", moved: true });        // "sub" at a statement start
+      if (en.state().phase !== "open" || en.state().id !== "mermaid") fail("hint:open");
+      if (!en.state().items.some(it => it.ins === "subgraph")) fail("hint:items");
+      if (!en.key({ key: "Enter" }) || en.state().phase !== "off") fail("hint:take");
+      if (en.host.did.length !== 1 || en.host.did[0].text !== "subgraph" || en.host.did[0].from !== 0) fail("hint:commit");
+      if (en.host.lines()[2] !== "subgraph") fail("hint:line");
+      en.host.type(" "); en.sense({ typed: " ", moved: true });        // the word ended
+      if (en.state().phase !== "off") fail("hint:space");
+      en.host.type("x"); en.sense({ typed: null, moved: true, docChanged: true });   // a paste
+      if (en.state().phase !== "off") fail("hint:paste");
+      const e2 = HC.create(host(["```mermaid", "flowchart TD", "A[St", "```"], 2, 4), { mode: "auto" });
+      e2.host.type("a"); e2.sense({ typed: "a", moved: true });        // inside a label: prose
+      if (e2.state().phase !== "off") fail("hint:label");
+      const e3 = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "manual" });
+      e3.host.type("b"); e3.sense({ typed: "b", moved: true });
+      if (e3.state().phase !== "off") fail("hint:manual");
+      if (!e3.key({ key: " ", ctrlKey: true }) || e3.state().phase !== "open") fail("hint:invoke");
+      const e4 = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "off" });
+      e4.host.type("b"); e4.sense({ typed: "b", moved: true });
+      if (e4.state().phase !== "off" || e4.key({ key: " ", ctrlKey: true })) fail("hint:offintent");
+      const e5 = HC.create(host(["```mermaid", "flowchart TD", "sub", "```"], 2, 3), { mode: "auto" });
+      e5.host.type("g"); e5.sense({ typed: "g", moved: true });        // "subg"
+      if (e5.state().phase !== "open" || !e5.state().items.some(it => it.ins === "subgraph")) fail("hint:grow");
+      e5.host.put({ l: 2, c: 2 }); e5.sense({ typed: null, moved: true });   // inside the span: follows
+      if (e5.state().phase !== "open") fail("hint:follow");
+      e5.host.put({ l: 0, c: 0 }); e5.sense({ typed: null, moved: true });   // left the fence body
+      if (e5.state().phase !== "off") fail("hint:move");
+      const e6 = HC.create(host(["see [[We"], 0, 9), { mode: "auto" });
+      e6.sense({ typed: "e", moved: true });
+      if (e6.state().phase !== "open" || e6.state().id !== "wiki") fail("hint:wiki");
+      if (!e6.key({ key: "Tab" }) || e6.host.did[0].text !== "[[Welcome]]") fail("hint:wikitake");
+      if (e6.host.did[0].from !== 4 || e6.host.lines()[0] !== "see [[Welcome]]") fail("hint:wikiline");
+      const e7 = HC.create(host(["see [[Alpha#In"], 0, 14), { mode: "auto" });
+      e7.sense({ typed: "n", moved: true });
+      if (e7.state().phase !== "open" || e7.state().items[0].ins !== "Alpha#Intro") fail("hint:head");
+      // an answer that arrives after the caret moved must be dropped, not painted
+      const pend = [];
+      HC.register({ id: "self:async", priority: 1, match: () => true, trigger: () => true,
+        offer: () => ({ then(cb) { pend.push(cb); } }), commit: () => {} });
+      const e8 = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2),
+        { mode: "auto", providers: { mermaid: false, wiki: false } });
+      e8.sense({ typed: "s" }); e8.sense({ typed: "s", moved: true });
+      pend[0]({ items: [{ ins: "old", label: "old" }], range: { l: 2, from: 0, to: 4 } });   // stale
+      if (e8.state().phase !== "off") fail("hint:stale");
+      pend[1]({ items: [{ ins: "new", label: "new" }], range: { l: 2, from: 0, to: 4 } });
+      if (e8.state().phase !== "open" || e8.state().items[0].ins !== "new") fail("hint:fresh");
+      HC.unregister("self:async");
     }
     return bad;
   },
 };
 
 /* ---------- textarea-shaped view of the model ----------
-   The [[ autocomplete (acContext/acInsert) and the palette's format commands
-   (edEdit: bold/italic/highlight...) were written against a <textarea>. They
-   keep working through this shim: reads are model reads, writes go back
-   through the model + a full patch, so nothing edits the DOM directly. */
+   The palette's format commands (edEdit: bold/italic/highlight...) and the
+   search field were written against a <textarea>. They keep working through
+   this shim: reads are model reads, writes go back through the model + a full
+   patch, so nothing edits the DOM directly. (The [[ completion stopped using
+   it: ui/hint-wiki.js reads the caret and the line through the hint engine's
+   host instead.) */
 Ed.field = function (g) {
   const L = Ed.lines(g), s = Ed.sel(g) || { a: { l: 0, c: 0 }, b: { l: 0, c: 0 } };
   const off = p => { let o = 0; for (let i = 0; i < p.l && i < L.length; i++) o += L[i].length + 1; return o + p.c; };
@@ -1750,7 +1814,9 @@ Object.assign(Ed, {
             v._sp = otel.begin("key_to_paint", { key: e.inputType, note_lines: g.lpLines || 0 });
           return false;
         },
-        blur: () => { if (typeof hideAc === "function") setTimeout(hideAc, 100); return false; },
+        // A pick lands via mousedown on the popup row, so the close is deferred
+        // past that click (100 ms, the old hideAc delay) before the list ends.
+        blur: () => { const g = G(); if (g && g._hints) setTimeout(() => g._hints.close("blur"), 100); return false; },
         // gh-paste (#19): a PNG on the clipboard (a screenshot) is saved into the vault and
         // embedded, like stock (ui/main.js attachPaste); true = claimed, CM6 does not paste text
         paste: (e) => typeof attachPaste === "function" ? attachPaste(G(), e) : false,
@@ -1774,6 +1840,21 @@ Object.assign(Ed, {
     Ed.wheelOwn(lp);
     return lp;
   },
+  /* What the user TYPED in this update: the last character of a pure insertion,
+     or null. CM6 annotates every transaction with its origin (input.type,
+     input.paste, delete.*, undo, redo, and our own os.<kind> through Ed.replace),
+     so the hint engine can tell typing from "something changed" without
+     guessing at change shapes: a paste, an undo, a drag-drop or a pick never
+     opens a list. Fast typing may batch two characters into one transaction;
+     the LAST character is the one now under the caret. */
+  typedChar(u) {
+    if (!u || !u.docChanged) return null;
+    const t = u.transactions[u.transactions.length - 1];
+    if (!t || !t.isUserEvent("input.type")) return null;
+    let typed = "", pure = true;
+    u.changes.iterChanges((fa, ta, fb, tb, ins) => { if (ta === fa) typed = ins.toString(); else pure = false; });
+    return pure && typed ? typed.slice(-1) : null;
+  },
   onUpdate(g, v, u) {
     Ed.kroMap(u);
     if (!g || g.view !== v) { if (u.docChanged && v.editor) v.editor.value = u.state.doc.toString(); return; }
@@ -1789,7 +1870,11 @@ Object.assign(Ed, {
       }
       Ed.sync(g);
       if (typeof scheduleSave === "function") scheduleSave(g);
-      if (typeof showAc === "function") showAc(g, u);      // u: the hints need to know a CHARACTER was typed
+      // The pane's hint ENGINE (ui/hint-core.js): `typed` is the character the
+      // user typed (a CM6 input.type transaction), so the engine — not this
+      // file — decides whether a list opens, stays, or ends. A change with no
+      // typed character (paste, delete, undo, our own insertion) only ends one.
+      if (g._hints) g._hints.sense({ typed: Ed.typedChar(u), moved: !!u.selectionSet, docChanged: true });
       if (v._sp) { const sp = v._sp; v._sp = null; if (otel.paint) otel.paint(sp); }
       if (typeof perf !== "undefined" && perf.mark) {
         // R18 ed_patch = the JS work after ONE doc change (CM6 redraws only the
@@ -1799,10 +1884,14 @@ Object.assign(Ed, {
         perf.mark("ed_patch", t0, { lines: d.lines, patched: n, full: n >= d.lines && d.lines > 3 });
       }
     }
-    /* A caret move with no typing ENDS the hint list: arrows, Home/End, a
-       click, a search jump. (A doc change is handled above — typing keeps or
-       re-derives it, and accepting a suggestion closes it in acInsert.) */
-    if (u.selectionSet && !u.docChanged && typeof acMmdClose === "function") acMmdClose();
+    /* A caret move with no typing: the engine keeps a list that still
+       describes the caret (it re-filters as the cursor moves inside its span)
+       and ends it when the cursor leaves that span — arrows, Home/End, a click,
+       a search jump. That is the "follows the cursor" half of the engine. */
+    if (u.selectionSet && !u.docChanged && g._hints) g._hints.sense({ typed: null, moved: true, docChanged: false });
+    /* Layout moved (a scroll, a resize, a rewrapped row): repaint the popup at
+       the caret. Skipped on a doc change — `sense` above already painted. */
+    if (!u.docChanged && g._hints && (u.geometryChanged || u.viewportChanged)) g._hints.reanchor();
     if (u.selectionSet || u.docChanged) { const p = Ed.focusPos(g); Ed.mark(g, p ? p.l : -1); }
   },
   /* keys CM6 does not own: Enter (list continuation), Backspace/Delete (model
@@ -1810,7 +1899,10 @@ Object.assign(Ed, {
      R17 semantics, now on the CM6 selection */
   onKey(g, e) {
     if (!g || e.isComposing) return;
-    if (typeof acKeydown === "function") { acKeydown(g, e); if (e.defaultPrevented) return; }
+    /* The hint engine owns the keys WHILE its list is up (arrows, the accept
+       keys, Escape) and the explicit invoke (Ctrl+Space) — and nothing else;
+       every other key is the editor's, which is what keeps typing natural. */
+    if (g._hints && g._hints.key(e)) { e.preventDefault(); e.stopPropagation(); return; }
     const s = Ed.sel(g); if (!s) return;
     const mod = e.ctrlKey || e.metaKey;
     if (e.key === "Enter" && !mod && !e.altKey) {

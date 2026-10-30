@@ -210,5 +210,13 @@
 <script src="i18n.js"></script>
 <script src="keychain.js"></script>
 <script src="mermaid-syntax.js"></script>
+<script src="hint-nav.js"></script>
+<!-- the completion engine (L1) and its providers (L2): vocabulary first, then
+     the mermaid grammar tables (L0 data + their interpreter), then the engine,
+     then one file per syntax, then the pane that hosts and paints them. main.js
+     must stay last: it registers the host. -->
+<script src="hint-core.js"></script>
+<script src="hint-mermaid.js"></script>
+<script src="hint-wiki.js"></script>
 <script src="main.js"></script>
 </body></html>

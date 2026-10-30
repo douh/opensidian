@@ -80,50 +80,56 @@ fn the_type_list_is_the_whole_shipped_grammar() {
 #[test]
 fn the_module_is_a_classic_script_loaded_before_main() {
     let html = read("ui/index.html");
-    let m = html.find("script src=\"mermaid-syntax.js\"").expect("mermaid-syntax.js is not loaded by index.html");
+    let vocab = html.find("script src=\"mermaid-syntax.js\"").expect("mermaid-syntax.js is not loaded by index.html");
+    let prov = html.find("script src=\"hint-mermaid.js\"").expect("hint-mermaid.js tag");
     let main = html.find("script src=\"main.js\"").expect("main.js tag");
-    assert!(m < main, "mermaid-syntax.js must load BEFORE main.js (showAc reads window.MmdHints)");
+    assert!(vocab < prov, "the vocabulary must load BEFORE the provider that reads it");
+    assert!(prov < main, "the providers must load BEFORE main.js (it registers the host)");
     assert_has("ui/mermaid-syntax.js",
-        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, fenceOf, typeOf, suggest, errText }"]);
+        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, errText }"]);
 }
 
 #[test]
 fn the_popup_has_a_mermaid_source() {
-    assert_has("ui/main.js", &[
-        "function mmdContext(g, u)",
-        "MH.fenceOf(",
-        "if (!f || f.lang !== \"mermaid\") return null;",
-        "acKind = \"m\";",
-        "function paintAc(g)",
-        "if (acKind === \"m\") Ed.acInsertText(g, acLine, acStart, acEnd, name);",
-        // a [[ completion after a mermaid hint must fall back to the note path
-        "acStart = ctx.start; acLine = 0; acEnd = -1;",
+    // The mermaid half is a PROVIDER of the hint engine (ui/hint-core.js): its
+    // own file, its own three answers, the vocabulary from ui/mermaid-syntax.js.
+    // main.js no longer knows anything about mermaid syntax.
+    assert_has("ui/hint-mermaid.js", &[
+        "id: \"mermaid\"",
+        "if (!f || f.lang !== \"mermaid\") return false;",
+        "const w = M.wordAt(ctx.before);",
+        "return M.statementStart(ctx.before.slice(0, w.from));",
+        "trigger(typed) { return M.wordChar(typed); },",
+        "const sug = M.suggest(ctx.lines.slice(f.start, ctx.l), ctx.before);",
+        "range: { l: ctx.l, from: ctx.c - w.word.length, to: ctx.c }",
+        "commit(it, ctx, host) { host.replace(ctx.range, it.ins); },",
     ]);
 }
 
 #[test]
 fn the_hints_follow_typing_not_changes() {
-    // The input flow: the list opens only for a TYPED word character at the start
-    // of a statement, moves on the arrow keys, takes Enter/Tab, and ends on
-    // Escape, punctuation or a bare caret move. These seams are what make the
-    // popup usable; if any of them is dropped it degrades back to "a list that
-    // appears whenever the document changes".
-    assert_has("ui/main.js", &[
-        "function acTypedChar(u)",
+    // The input flow lives in the ENGINE now, once, instead of in three helpers
+    // in main.js: typing (only) may open, a caret move only refreshes a list
+    // that still describes the caret, everything else only ends one, the arrow
+    // keys and accept keys belong to the list, Escape ends it. If any of these
+    // is dropped the popup degrades back to "a list that appears whenever the
+    // document changes" — the defect this flow was built to fix.
+    assert_has("ui/editor.js", &[
+        "typedChar(u) {",
         // the flow is keyed on the transaction's origin, not on change shapes:
         // paste, undo, redo, drag-drop and our own insertions never open a list
         "if (!t || !t.isUserEvent(\"input.type\")) return null;",
-        "if (!ch || !MH.wordChar(ch)) return null;",
-        "if (!sug || !sug.word || !sug.items.length) return null;",
-        "if (!MH.statementStart(before)) return null;",
-        "async function showAc(g, u)",
-        "const mm = mmdContext(g, u);",
-        "function acMmdClose() { if (acKind === \"m\") hideAc(); }",
-        "} else if (acKind === \"m\" && e.key.length === 1 && !/[\\w-]/.test(e.key)) {",
+        "g._hints.sense({ typed: Ed.typedChar(u), moved: !!u.selectionSet, docChanged: true });",
+        "if (u.selectionSet && !u.docChanged && g._hints) g._hints.sense({ typed: null, moved: true, docChanged: false });",
+        "if (g._hints && g._hints.key(e)) { e.preventDefault(); e.stopPropagation(); return; }",
     ]);
-    assert_has("ui/editor.js", &[
-        "if (typeof showAc === \"function\") showAc(g, u);",
-        "if (u.selectionSet && !u.docChanged && typeof acMmdClose === \"function\") acMmdClose();",
+    assert_has("ui/hint-core.js", &[
+        "if (!typed) return false;",                       // nothing opens without a typed character
+        "if (use() !== \"auto\") return false;",            // manual/off are intents, not hints
+        "if (!p || !p.trigger(typed, ctx)) return false;",
+        "if (!inside(st.range, ctx)) return close(\"moved\");",
+        "if (e.key === \"Escape\") { close(\"escape\"); return true; }",
+        "if (settings().accept.indexOf(e.key) >= 0) { pick(st.sel); return true; }",
     ]);
     // and the policy itself is pure, so selfTest proves it on every launch
     assert_has("ui/editor.js", &["fail(\"mmd:char\")", "fail(\"mmd:start\")"]);
@@ -131,10 +137,14 @@ fn the_hints_follow_typing_not_changes() {
 
 #[test]
 fn insertion_goes_through_the_model() {
-    assert_has("ui/editor.js", &[
-        "acInsertText(g, l, c0, c1, text)",
-        "Ed.replace(g, { a: { l, c: Math.max(0, c0) }, b: { l, c: Math.max(0, c1) }, empty: false }",
+    // One primitive for both providers: the host's `replace` on the offered
+    // span, through Ed.replace (the model) — same undo entry, dirty flag and
+    // save path as typing. A provider never touches a DOM node.
+    assert_has("ui/main.js", &[
+        "replace: (r, text) => Ed.replace(g,",
+        "{ a: { l: r.l, c: Math.max(0, r.from) }, b: { l: r.l, c: Math.max(0, r.to) }, empty: false },",
     ]);
+    assert_has("ui/hint-wiki.js", &[r#"commit(it, ctx, host) { host.replace(ctx.range, "[[" + it.ins + "]]"); },"#]);
 }
 
 #[test]
@@ -148,16 +158,22 @@ fn a_broken_diagram_explains_itself_in_both_views() {
 
 #[test]
 fn the_app_checks_the_hints_on_every_load() {
-    // Ed.selfTest runs at startup, so the pure half of these hints is proven on
-    // a real webview without typing anything — a regression surfaces as
-    // [edt:mmd:...] in the window title. That also means the checks may not be
-    // quietly dropped when selfTest is refactored.
-    assert_has("ui/editor.js", &["const MH = window.MmdHints;", "fail(\"mmd:types\")",
-        "MH.fenceOf(mdoc, 3, dt.length)", "fail(\"mmd:err\")"]);
+    // Ed.selfTest runs at startup, so the pure half of these hints AND the hint
+    // engine (driven on a fake host) are proven on a real webview without
+    // typing anything — a regression surfaces as [edt:mmd:...] / [edt:hint:...]
+    // in the window title. That also means the checks may not be quietly
+    // dropped when selfTest is refactored.
+    assert_has("ui/editor.js", &["const MH = window.MmdHints, HC = window.HintCore;",
+        "fail(\"mmd:types\")", "MH.fenceOf(mdoc, 3, dt.length)", "fail(\"mmd:err\")", "fail(\"mmd:word\")"]);
+    assert_has("ui/editor.js", &["fail(\"hint:open\")", "fail(\"hint:take\")", "fail(\"hint:stale\")"]);
     assert_has("ui/mermaid-syntax.js", &[r#".replace(/^\.{3}\s*/, "")"#]);
 }
 
 #[test]
 fn the_probe_can_see_the_hints() {
-    assert_has("ui/census.js", &["[mmd:", "[mmderr:"]);
+    // [hintmode:] always (the intent reaches the engine), [hint:open:p:n:first]
+    // while a list is up (what the popup SAYS, not just that something covers
+    // pixels), [mmderr:] the parser's own line under a broken diagram.
+    assert_has("ui/census.js", &["hintTok()", "[mmderr:"]);
+    assert_has("ui/main.js", &["[hintmode:", "[hint:"]);
 }

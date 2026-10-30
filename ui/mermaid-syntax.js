@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 /* mermaid syntax hints — the vocabulary a ```mermaid fence may use, plus the
-   two pure functions the editor asks on every keystroke (main.js showAc ->
-   mmdContext). Written against the vendored build's own grammar: every string
+   pure functions the hint engine's mermaid provider
+   (ui/hint-mermaid.js) asks on every keystroke. Written against the vendored
+   build's own grammar: every string
    between the HINTS markers below is asserted to occur in
    ui/vendor/mermaid/mermaid.min.js (src-tauri/tests/mermaid_hints.rs), so a
    typo, an invented keyword or a vocabulary drift fails the suite instead of
@@ -18,8 +19,11 @@
    and never inserts more than that word (plus a direction for flowchart): the
    editor groups one typing burst into one undo step, so a completion that
    expanded into a template would make one Ctrl+Z undo lines nobody watched
-   appear. Insertion goes through the editor model either way (Ed.acInsertText),
-   so a suggestion is edited like typed text — same undo, same dirty flag. */
+   appear. Insertion goes through the host's `replace` (the editor model) either
+   way, so a suggestion is edited like typed text — same undo, same dirty flag.
+
+   This file is L0: data and pure functions, no caret, no view. The provider
+   (ui/hint-mermaid.js) decides WHEN these answers are asked. */
 (function () {
   "use strict";
 
@@ -116,24 +120,32 @@
     return null;
   }
 
+  /* The word abutting the caret, with the column it starts at — the span a
+     picked candidate replaces. `null` when the caret sits on whitespace, which
+     is how "the word ended" reaches the provider's `match`. */
+  function wordAt(prefix) {
+    const m = WORD.exec(String(prefix == null ? "" : prefix));
+    return m ? { word: m[0], from: m.index } : null;
+  }
+
   /* Candidates for the caret at `prefix` (the text before it on its line), with
      the body lines `prev` above it. `word`/`from` describe the span the popup
      replaces; `items` are {ins, label, badge}. An empty word at the top of a
      fence lists the diagram types (discovery); an empty word after a directive
      lists that diagram's keywords. */
   function suggest(prev, prefix) {
-    const m = WORD.exec(prefix);
-    const word = m ? m[0] : "";
-    const from = m ? m.index : prefix.length;
+    const w = wordAt(prefix);
+    const word = w ? w.word : "";
+    const from = w ? w.from : String(prefix == null ? "" : prefix).length;
     if (/^\s*%%/.test(prefix)) return { word, from, items: [] };    // comment lines get no noise
     const d = typeOf(prev);
-    const w = word.toLowerCase();
+    const q = word.toLowerCase();
     let items;
     if (!d) {
-      items = TYPES.filter(([id]) => id !== word && id.toLowerCase().startsWith(w))
+      items = TYPES.filter(([id]) => id !== word && id.toLowerCase().startsWith(q))
         .map(([id, arg]) => ({ ins: arg ? id + " " + arg : id, label: id, badge: arg || "" }));
     } else {
-      items = (KW[d.key] || []).filter(k => k !== word && k.toLowerCase().startsWith(w))
+      items = (KW[d.key] || []).filter(k => k !== word && k.toLowerCase().startsWith(q))
         .map(k => ({ ins: k, label: k, badge: "" }));
     }
     return { word, from, items: items.slice(0, MAX) };
@@ -172,5 +184,5 @@
       .trim();
   }
 
-  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, fenceOf, typeOf, suggest, errText };
+  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, errText };
 })();

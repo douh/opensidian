@@ -1203,6 +1203,52 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+### Mermaid flowchart grammar (flow.jison) + jison 0.4.18 (build-time only)
+
+**Used in:** `tools/vendor/flow-11.17.2.jison` — mermaid's flowchart grammar,
+sha256 `b95d5a12271ece39b9be35fdc082801ed73c179e54f2903b472452394991e384`, taken
+byte-for-byte from `mermaid@11.17.2` (`packages/mermaid/src/diagrams/flowchart/parser/flow.jison`).
+`tools/gen-hint-nav.js` compiles it with **jison 0.4.18** (npm, never shipped, not
+a dependency of the app) and writes the derived tables `ui/hint-nav.json`, which
+`ui/hint-nav.js` interprets at runtime. The grammar text is NOT an input of the
+app; only its compiled tables are.
+**Upstream:** https://github.com/mermaid-js/mermaid (MIT) and
+https://github.com/zaach/jison (npm `jison@0.4.18`, MIT).
+**Licence:** both MIT, GPL-compatible; the derived JSON is a data transformation
+of MIT material and stays under MIT. Copyright lines of both works:
+
+```
+The MIT License (MIT)
+
+Copyright (c) 2015 Knut Sveidqvist            (flow.jison, mermaid)
+Copyright (c) 2009-2014 Zachary Carter        (jison 0.4.18)
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
+No jison source or generated parser code is redistributed: the JSON holds the
+LALR table, the lexer's rule sources and a serialized action per rule, produced
+by executing jison's compiled lexer once at build time. Rebuild with
+`npm i --prefix /tmp/hint-nav-tool jison@0.4.18 && NODE_PATH=/tmp/hint-nav-tool/node_modules node tools/gen-hint-nav.js`
+and verify with `node tools/selftest-hint-nav.js`; `src-tauri/tests/hint_nav.rs`
+recomputes the sha256 above so a hand edit cannot pass as a regeneration.
+
 
 ## glib 0.18.5 (vendored Rust crate, gtk-rs)
 

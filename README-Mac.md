@@ -17,7 +17,7 @@
 | macOS 打包 | `packaging/macos/make-app.sh` 产出 `src-tauri/target/macos/Opensidian.app`（ad-hoc 签名、App Sandbox、原生标题栏与红绿灯按钮） |
 | 界面语言 | 英文 / 简体中文，跟随系统；设置、命令面板、热键页、状态栏等界面文案已本地化 |
 | MCP | `.app` 内含只读的 `opensidian-mcp`（stdio），供任意本地 MCP 客户端读取仓库 |
-| 渲染 | 阅读视图的代码高亮、Mermaid 与公式，以及 Live Preview 里的围栏块；` ```mermaid ` 围栏内还有语法提示与解析错误提示（上游尚未实现，见下文「Mermaid」两节） |
+| 渲染 | 阅读视图的代码高亮、Mermaid 与公式，以及 Live Preview 里的围栏块；` ```mermaid ` 围栏内还有语法提示与解析错误提示（上游尚未实现，见下文「补全」与「Mermaid」两节） |
 | 其余 | 跟随上游（Linux 包、Landlock 自沙盒、插件市场、主题等行为不变） |
 
 ## 安装
@@ -173,19 +173,47 @@ cargo test --locked
 
 测试红不是 bug，是**合并决策**：按上表逐条落定，再手工开一张含 ` ```mermaid ` 的笔记，阅读视图与 Live Preview 各看一眼。若上游只实现低功能版（无兜底、无 LP），我们的取舍是"用他们的渲染路径，把我们的兜底作为小补丁加回"，而不是整段回退。
 
+## 补全：一个引擎，两个提供者（`ui/hint-core.js`）
+
+`[[` 链接补全与 mermaid 关键字补全曾各自维护半截输入流：什么时候弹、光标动了算不算结束、键位归谁、取用走哪条插入路径，散在 `showAc`/`acKeydown`/`acMmdClose` 里，一处改动另一处就失配。**这两件事本来就是同一件事**——"光标所在处允许写什么、按了什么键、取用后落到哪"——所以现在只有一份实现，按依赖单向分成四层：
+
+| 层 | 文件 | 只负责 |
+|---|---|---|
+| L0 知识 | `ui/mermaid-syntax.js`、`ui/hint-nav.js` + `ui/hint-nav.json` | 词表 + 纯函数（围栏、语句起始、前缀过滤、错误措辞）；语法导航的机器表（见「Mermaid」一节的「语法导航」）；不认识光标 |
+| L1 引擎 | `ui/hint-core.js` | 状态机、上下文、意图、键位、异步归属；**无 DOM、无 app 全局** |
+| L2 提供者 | `ui/hint-mermaid.js`、`ui/hint-wiki.js` | 为各自语法回答 `match`/`trigger`/`offer`/`commit`，只通过 host 接口说话 |
+| L3 宿主 + 呈现 | `ui/main.js` | `hintHost(g)`（读模型与仓库）与 `paintHints`（**唯一**写 `g.acEl` 的地方） |
+
+**上下文状态管理。** 每个 pane 一个引擎（`mkGroup` 里 `g._hints = HintCore.create(hintHost(g))`），列表状态跟着 pane 走。引擎把光标、本行前缀、围栏、本次键入收进一个 `ctx` 交给提供者；`state()` 给出可被 census/自检读取的快照（含 `at` 与 `fence`）。
+
+**随光标而动。** 事件只有三个来源：编辑器事务（`sense`）、按键（`key`）、布局变化（`reanchor`）。规则集中在引擎里：
+- 只有**打出来的字符**能开列表（`input.type` 事务；粘贴/撤销/删除/程序化插入只关不开）；
+- 列表打开时，光标**仍在本词跨度内**就跟着重算（左/右移动即重新过滤），离开就结束；
+- 空格/标点/回车让 `match` 不再成立，列表当场结束，而不是"先关、再让字符落进去"。
+
+**用户意图。** `auto`（默认，打字即提示）/ `manual`（只有 Ctrl+Space 显式唤出）/ `off`（永不），另有按提供者开关与取用键；存在 `localStorage["os.hints"]`。命令面板一行 `hints:cycle-intent` 循环并给出提示当前值；`create(host, { mode, providers })` 可对单个引擎覆盖——自检据此在不改用户设置的前提下证明三种意图。
+
+**异步归属。** `[[note#` 要跨文件读笔记，答案回来时光标可能已走。每次 `offer` 带一个 generation 令牌，只有最新那次允许上屏（旧实现里那句 `now.q !== ctx.q` 是这颗种子，现在是引擎级规则）。
+
+**键位**：引擎 `key(e)` 只回答"我要这个键"，`preventDefault` 由编辑器做（便于无事件对象地测试）。列表打开时 ↑/↓ 移选择、Enter/Tab 取用、Esc 结束；Ctrl+Space 是显式唤出，除 `off` 外一律吞掉，免得插进一个空格。
+
+**插入**：两个提供者都走 `host.replace(range, text)` → `Ed.replace`（模型、行锚定、一次撤销、同脏标记、同保存路径）；`Ed.acInsert`/`Ed.acInsertText` 因此删除，全 app 只剩一条插入路径。
+
+**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题），失败以 `[edt:hint:…]` 出现在窗口标题。`src-tauri/tests/hint_engine.rs`（8 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、异步令牌；`tests/mermaid_hints.rs`（9 条）继续钉住 mermaid 的词表与连线。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现。
+
 ## Mermaid：围栏里的语法提示
 
-围栏内写图时，两件事有提示：**能写什么**（补全）与**哪儿写错了**（解析错误）。两者共用一份知识源 `ui/mermaid-syntax.js`（普通 `<script>`，在 `main.js` 之前加载），不新增任何 vendored 包——`@codemirror/autocomplete` 与 `@codemirror/lint` 虽已随 `ui/vendor/codemirror/cm6.js` 存在，但 app 的补全一直是自研弹窗（`[[` 链接就是它），再用一套 CM6 扩展只会多出一条并行路径。
+围栏内写图时，两件事有提示：**能写什么**（补全）与**哪儿写错了**（解析错误）。知识源仍是 `ui/mermaid-syntax.js`（普通 `<script>`，在引擎与 `main.js` 之前加载），不新增 vendored 包——CM6 自带的 `@codemirror/autocomplete`/`lint` 虽已随 `ui/vendor/cm6` 存在，仍不使用，避免第二套并行路径。
 
-- **补全（输入流，不是"文档变了就弹"）**：`Ed.onUpdate` 把本次更新交给 `showAc(g, u)`；`acTypedChar(u)` 先看 CM6 给这次事务打的来源标注，**只有 `input.type` 才算打字**——粘贴、撤销、拖放、程序化插入一律不弹，所以不用去猜"这次改动像不像打字"。随后 `mmdContext(g, u)` 过三道闸：围栏（`fenceOf` 委托 `Ed.fenceAt`，与渲染器同一函数）、位置（`statementStart`：这个词必须从行首缩进后开始，节点标签 `A[Start`、边文本 `|open|`、标题里一律不弹）、词表（`suggest`，按前缀过滤，26 种图型或该图型关键字；`%%` 注释行不弹）。快打时两个字符可能并进一次事务，取最后一个字符判断即可，列表照常出现。
-- **键位**：列表打开时 ↑/↓ 只移选择（光标不动）、Enter/Tab 取用、Esc 关闭、其余可打印键（空格/标点/引号）先关列表再落到编辑器——下一个键永远是用户想按的那个；取用经 `Ed.acInsertText` 走编辑器模型（行锚定、一次撤销、同脏标记），光标停在词尾，不展开模板。光标自己移动（方向键、点击、Home/End）由 `acMmdClose` 关列表；`[[` 补全的行为不变。
-- **错误**：解析失败时阅读视图与 Live Preview **都**保留源码，并在下面追加一行解析器自己的话（`MmdHints.errText` 把 jison 的 `Parse error on line N: … Expecting …` 压成一行，行号只取自 `hash.loc`，不臆造）。空盒是绝不会出现的失败形态。
+- **补全**：`ui/hint-mermaid.js` 作为提供者回答四问——`match`（光标在 mermaid 围栏体内、落在**词**上、且这个词从语句起始处开始；节点标签 `A[Start`、边文本 `|open|`、标题是散文，不弹）、`trigger`（本次键入的是词字符）、`offer`（`M.suggest` 取围栏体内光标上方的行；替换跨度是本行这个词的列区间）、`commit`（经 host 插入）。围栏判定用 `M.fenceOf` → `Ed.fenceAt`，与渲染器同一个函数，所以能补的行一定是渲染器会画的行。
+- **错误**：解析失败时阅读视图与 Live Preview **都**保留源码，并追加解析器自己的话（`MmdHints.errText` 把 jison 的 `Parse error on line N: … Expecting …` 压成一行，行号只取自 `hash.loc`，不臆造）。空盒绝不会出现。
 - **真实性**：`HINTS-BEGIN/HINTS-END` 之间的每个字符串都是"词表声明"，`src-tauri/tests/mermaid_hints.rs` 逐条在 `ui/vendor/mermaid/mermaid.min.js` 里查存在——提议 Mermaid 会拒绝的语法比不提更糟。因此 `zenuml`（11.17.2 的解析图里没有该 parser）与 ER 基数符号（压缩后的 lexer 由碎片拼出，无字面量可查）**故意不收**。
-- **自检**：纯函数的场景挂在 `Ed.selfTest()` 里，启动即在真机跑一遍，失败会以 `[edt:mmd:…]` 出现在窗口标题（正常是 `[edt:ok]`）；探针另有 `[mmd:n:首个候选]` 与 `[mmderr:一行错误]` 两个 census token。
+- **语法导航**：光标停在 `A--` 后面该接什么，不是风格问题，是 mermaid 自己语法的事。两层各有各的答案：字符层由 lexer 决定（`o`/`x`/`>`/`-` 才是箭头，其他字符开始边文本，`"` 静默进 `string` 条件），token 层由 LALR 表决定（`A-->` 之时期望 13 个 token，含节点 `NODE_STRING`/`UNICODE_TEXT` 与开标签的 `PIPE`）。表不是手写的：`tools/vendor/flow-11.17.2.jison`（上游 `mermaid@11.17.2` 的 `flow.jison`，MIT，sha256 `b95d5a12…e384`）在**构建期**被 jison 0.4.18 编译一次，由 `tools/gen-hint-nav.js` 写成 `ui/hint-nav.json`（291 状态 / 4142 格 / 190 产生式 / 84 终结符 / 122 条词法规则 / 21 个条件，约 68 KB）。应用里**不装 jison、不跑 jison、不做 eval**：`ui/hint-nav.js` 只解释这份数据（`load`/`tokenize`/`drive`/`at`/`chars`），无 DOM、无 app 全局，`prefix` 必须从围栏体起算（`graph` 打开 `dir`、`--` 打开 `edgeText`，且 mermaid 的 `firstGraph()` 只认第一个 `graph`）。于是提示内容由**光标位置**决定，字母只改过滤词。重建：`npm i --prefix /tmp/hint-nav-tool jison@0.4.18 && NODE_PATH=/tmp/hint-nav-tool/node_modules node tools/gen-hint-nav.js`（装在仓外，避免 node_modules 弄脏工作树；`--check` 只比对不写；数据是单行紧凑 JSON，改一个字节就是一次可评审的 diff）。验收：`node tools/selftest-hint-nav.js`（45 条断言，零依赖，`A--` 字符类、`A-->` 期望、`A-->B` 收尾、词法错误不抛不转圈），Rust 侧 `src-tauri/tests/hint_nav.rs` 5 条（重算语法 sha256、表规模、运行时纯净、脚本层序、生成器与自检仍在）。移植时还与 jison 逐 token 对拍过 133 个输入（53 条语料 + 一张真实图的每个前缀），token 名与词法状态全等；已知上游死 token（`SEP`/`QUOTE`，语法里没有对应产生式）如实写进 `meta.deadTokens`，运行时按 jison 的"无 token"路径跳过。
+  **尚未接线**：把 `HintNav.load(await (await fetch("hint-nav.json")).text())` 与 `at()` 接到 `hint-mermaid.js` 的 `offer`（"此处需要一个 Node"、`A--` 后的 `o/x/>` 候选）是下一步；今天入库的是数据、解释器、生成器与上面的自检，索引页按 L0 顺序加载 `hint-nav.js`。
 
-真机验证（macOS 探针，非自动化测试，输入法切 ABC 后按键才不被候选栏截走）：围栏内打 `b`（接在 `sub` 后）弹出唯一候选 `subgraph`，Enter 取用后落盘；一次 `keystroke` 连发 `su`（并批）同样弹出；空格落下且列表当场关闭、此时 Enter 才是换行；Esc 关闭；粘贴 `xy` 与在 `A[Open] --> B` 这一行中段打 ` e` 都**不**弹；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`。
+真机验证（macOS 探针，非自动化测试，输入法切 ABC 后按键才不被候选栏截走）：围栏内接在 `sub` 后打 `b` 弹出唯一候选 `subgraph`，Enter 取用后落盘且列表关闭；一次 `keystroke` 连发 `su`（并批）同样弹出；空格落下、列表当场关闭（此时 Enter 才是换行）；Esc 关闭；粘贴 `xy`、在 `A[Open] --> B` 行中段打 ` e` 都**不**弹；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`；标题为 `[edt:ok]`、`[hintmode:auto]`。
 
-合并姿态：上游若自带补全，**取上游**的弹窗与词表，我们只把 `errText` 那行错误说明与 `.mmderr` 样式作为小补丁加回；若上游不做，这整块原样保留（`mermaid_hints.rs` 的 9 条断言保证它不会被某次重构顺手删掉）。
+合并姿态：上游若自带补全，**取上游**的弹窗与词表——我们的引擎/提供者是平台无关的 L2 上，冲突面只有 `index.html` 的脚本顺序、`onUpdate/onKey` 的两个缝和 `main.js` 的宿主/呈现函数；`errText` 那行错误说明与 `.mmderr` 样式仍以小补丁加回。上游不做则整块原样保留（`hint_engine.rs` 的 8 条 + `mermaid_hints.rs` 的 9 条保证它不会被某次重构顺手删掉）。
 
 ## 许可
 

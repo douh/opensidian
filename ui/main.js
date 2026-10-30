@@ -2435,6 +2435,12 @@ function mkGroup() {
   g.navback = q(".navback"); g.navfwd = q(".navfwd");
   g.graph = q(".graph");
   g.acEl = q(".ac"); g.status = q(".status");
+  // One hint ENGINE per pane (ui/hint-core.js): the popup's state lives with
+  // the pane it belongs to, and this file only paints it (paintHints).
+  if (window.HintCore) {
+    g._hints = HintCore.create(hintHost(g));
+    g._hints.subscribe(st => paintHints(g, st));
+  }
   g.stBl = q(".st-bl"); g.stWc = q(".st-wc"); g.stCc = q(".st-cc");
   pane.addEventListener("mousedown", () => focusGroup(g), true);  // R6.3: click focuses
   // graphhdr REQ-4: Ctrl+Click = Obsidian's "open to the right" (a linked pane in the OTHER mode)
@@ -4028,7 +4034,6 @@ function utBuild() {             // pane/focus census in the window title (headl
             menuTok() +
             (navInfo ? " [" + navInfo + "]" + (nvRv ? " [nvr:" + nvRv + "]" : "") : "") +
             (revealInfo ? " [bmrv:" + revealInfo + "]" : "") +      // bmmenu: "Reveal file in navigation" ran (bmReveal) — not merely "the Files pane is showing"
-            (acItems.length ? " [ac:" + acKind + ":" + acItems.length + "]" : "") +
             " [pane:" + sidePane + "]" +
             sfontTok() +                                        // sidefont: computed sidebar row font sizes (t=trow b=bmrow r=rlist)
             (sidePane === "search" && searchCount >= 0 ? " [sr:" + searchCount + "]" + srGeom() : "") +
@@ -4875,7 +4880,7 @@ async function setMode(g, mode) {   // R20 (#3): one target mode — tab menu ra
   twHold++;
   try {
   tab.mode = mode;
-  hideAc();
+  hintsCloseAll();
   applyMode(g, leave);
   mswpMark("apply");
   if (tab.mode === "reading") await preview(g, true);
@@ -5616,7 +5621,7 @@ function delTok() {
 }
 
 async function loadActive(g) {
-  hideAc();
+  hintsCloseAll();
   const t = g.active >= 0 ? g.tabs[g.active] : null;
   /* title-hdr: the header follows the active view BEFORE the first await. The caller has
      already switched the model (g.active / the tab's kind); a graph view then awaits its
@@ -7024,22 +7029,22 @@ async function updateStatus(g) {
   g.status.hidden = false;
 }
 
-/* ---------- [[ autocomplete (R3.4) ---------- */
-let notesCache = [], acItems = [], acSel = 0, acStart = -1, acKind = "n";
-let acLine = 0, acEnd = -1;      // mermaid hints: the replaced span is a column range on one line
+/* ---------- completion popup: host + presenter (R3.4 [[ links, mermaid hints) ----------
+   The ENGINE is ui/hint-core.js (L1): it owns the state machine (when a list
+   may open, what it says after the next keystroke, what a pick does) and asks
+   PROVIDERS (ui/hint-mermaid.js, ui/hint-wiki.js) what this caret may be given.
+   The two sides below are the rest of that contract: the HOST that lets the
+   engine read the model and the vault, and the PRESENTER that paints g.acEl.
+   Nothing here decides WHEN a list opens — that used to be spread over
+   showAc/acKeydown/acMmdClose in this file, which is exactly what the engine
+   replaced. */
+let notesCache = [];
 /* R29: the live-preview engine's image list — the SAME list the Rust renderer
    resolves against (`list_images` hands out `Index::images()` verbatim), so the
    two engines cannot disagree about what `![[pic.png]]` names (R29.7). Loaded
    with notesCache in refreshTree(); R29.11 (an image added while the vault is
    open) is a known gap on BOTH sides, not a JS one. */
 let imgsCache = [];
-
-function hideAc() {
-  const was = acItems.length;
-  for (const g of groups()) g.acEl.hidden = true;
-  acItems = []; acStart = -1; acLine = 0; acEnd = -1; acKind = "n";
-  if (was) updateTitle();
-}
 
 function fuzzy(q, s) {  // lower score = better; -1 = no match
   q = q.toLowerCase();
@@ -7056,174 +7061,89 @@ function fuzzy(q, s) {  // lower score = better; -1 = no match
   return 1000;
 }
 
-// R12: the field being typed in — the lp raw row when one is open (source +
-// live preview both edit there now), else the hidden model textarea
-const acField = g => (g.view && g.view.lines ? Ed.field(g) : g.editor);   // R17: a textarea-shaped view of the model
-function acContext(g) {  // caret inside an unclosed [[ on one line?
-  const ed = acField(g);
-  const upto = ed.value.slice(0, ed.selectionStart);
-  const a = upto.lastIndexOf("[[");
-  if (a < 0) return null;
-  const frag = upto.slice(a + 2);
-  if (frag.includes("]]") || frag.includes("\n")) return null;
-  return { start: a, q: frag };
+/* The host: everything a pane's engine may read, and the ONE way a pick lands.
+   A provider speaks this interface and nothing else, so a new syntax never has
+   to know about the editor, the vault or the view. `replace` goes through
+   Ed.replace — the model, one line, one undo step, the normal dirty flag and
+   save path — never a DOM edit. */
+function hintHost(g) {
+  return {
+    lines: () => Ed.lines(g),
+    caret: () => { const s = Ed.sel(g); return s ? s.b : null; },
+    fenceAt: (l, lines) => window.MmdHints
+      ? MmdHints.fenceOf({ line: i => ({ text: lines[i - 1] || "" }) }, l + 1, lines.length)
+      : null,
+    text: () => Ed.text(g),
+    notes: () => notesCache,
+    current: () => curOf(g),
+    readNote: name => inv("read_note", { name }),
+    heads: text => tocHeadsOf(text),
+    rank: (q, s) => fuzzy(q, s),
+    replace: (r, text) => Ed.replace(g,
+      { a: { l: r.l, c: Math.max(0, r.from) }, b: { l: r.l, c: Math.max(0, r.to) }, empty: false },
+      String(text == null ? "" : text), "ac"),
+  };
 }
 
-function caretXY(g) {    // R17: the real caret rect, relative to the pane
-  return Ed.caretXY(g);
-}
-
-/* The last doc change, seen as what the user actually did — or null. This is
-   what makes the hint flow an INPUT flow rather than a "something changed"
-   flow: only typing opens a list. CM6 annotates the transaction with its
-   origin (input.type / input.paste / delete.* / undo / redo / programmatic),
-   so a paste, an undo, a drag-drop or our own acInsertText never triggers
-   hints — no heuristics on change shapes. Fast typing may batch two chars
-   into one transaction; we look at the LAST inserted character, so a batch
-   that ends in a word char still opens the list. */
-function acTypedChar(u) {
-  if (!u || !u.docChanged) return null;
-  const t = u.transactions[u.transactions.length - 1];
-  if (!t || !t.isUserEvent("input.type")) return null;
-  let typed = "", pure = true;
-  u.changes.iterChanges((fa, ta, fb, tb, ins) => {
-    if (ta === fa) typed += ins.toString();
-    else pure = false;                       // replaced/deleted text: not a word being typed
-  });
-  const m = pure && /([A-Za-z0-9_-])$/.exec(typed);
-  return m ? m[1] : null;
-}
-
-/* mermaid syntax hints (ui/mermaid-syntax.js): the SAME popup as [[ completion,
-   offered when the user is TYPING a word inside a ```mermaid fence, at the
-   start of a statement. Three gates, in this order: typing (acTypedChar),
-   place (fenceOf -> Ed.fenceAt, the very function the live preview uses, so a
-   row we complete is always a row the renderer will draw), and position
-   (statementStart — labels, edge text and titles are prose and stay quiet).
-   The vocabulary is checked against the vendored bytes by
-   src-tauri/tests/mermaid_hints.rs. `[[` wins when both could apply: a wiki
-   link inside a node label is still a wiki link. The replaced span is located
-   on the doc LINE (not from a field offset) for the reason the [[ completion
-   learned earlier: an open lp row can shift offsets, a line cannot. */
-function mmdContext(g, u) {
-  const MH = window.MmdHints;
-  if (!MH || !Ed.fenceAt) return null;
-  const ch = acTypedChar(u);
-  if (!ch || !MH.wordChar(ch)) return null;               // typing only: paste, undo, space, Enter
-  const L = Ed.lines(g), s = Ed.sel(g);
-  if (!s || !L.length) return null;
-  const n = s.b.l + 1;                                   // fenceOf counts lines from 1
-  const f = MH.fenceOf({ line: i => ({ text: L[i - 1] || "" }) }, n, L.length);
-  if (!f || f.lang !== "mermaid") return null;
-  if (n <= f.start || (!f.unclosed && n >= f.end)) return null;   // the ``` lines themselves stay quiet
-  const prefix = L[s.b.l].slice(0, s.b.c);
-  const sug = MH.suggest(L.slice(f.start, n - 1), prefix);
-  if (!sug || !sug.word || !sug.items.length) return null;
-  const before = prefix.slice(0, prefix.length - sug.word.length);
-  if (!MH.statementStart(before)) return null;           // inside a label/title: no popup
-  return { l: s.b.l, from: s.b.c - sug.word.length, to: s.b.c, items: sug.items.slice(0, 8) };
-}
-
-async function showAc(g, u) {
-  const ctx = acContext(g);
-  if (!ctx) {
-    const mm = mmdContext(g, u);
-    if (!mm) return hideAc();
-    acKind = "m"; acLine = mm.l; acStart = mm.from; acEnd = mm.to; acItems = mm.items;
-    acSel = 0;
-    return paintAc(g);
-  }
-  const hi = ctx.q.indexOf("#");
-  if (hi >= 0) {
-    // R10.4: [[note#  -> that note's headings (level badge); [[note#^ -> its
-    // existing block ids. [[#  = the current note. Id generation for id-less
-    // blocks is LATER.
-    const note = ctx.q.slice(0, hi), frag = ctx.q.slice(hi + 1);
-    const target = note ? notesCache.find(n => n === note || n.endsWith("/" + note)) : curOf(g);
-    if (!target) return hideAc();
-    const text = target === curOf(g) ? g.editor.value : await inv("read_note", { name: target });
-    const now = acContext(g);                 // keystrokes raced the read: stale, let the next call draw
-    if (!now || now.q !== ctx.q) return;
-    if (frag.startsWith("^")) {
-      acKind = "b";
-      acItems = text.split("\n")
-        .map(l => (l.trimEnd().match(/ \^([A-Za-z0-9-]+)$/) || [])[1]).filter(Boolean)
-        .filter(id => fuzzy(frag.slice(1), id) >= 0)
-        .map(id => ({ ins: note + "#^" + id, label: "^" + id, badge: "" }));
-    } else {
-      acKind = "h";
-      acItems = tocHeadsOf(text).filter(h => fuzzy(frag, h.text) >= 0)
-        .map(h => ({ ins: note + "#" + h.text, label: h.text, badge: "H" + h.level }));
-    }
-    acItems = acItems.slice(0, 8);
-  } else {
-    acKind = "n";
-    acItems = notesCache
-      .map(n => [fuzzy(ctx.q, n), n])
-      .filter(([s]) => s >= 0)
-      .sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1]))
-      .slice(0, 8)
-      .map(([, n]) => ({ ins: n, label: n, badge: "" }));
-  }
-  acStart = ctx.start; acLine = 0; acEnd = -1;   // every branch above has already set acKind, so a [[ never inherits "m"
-  if (!acItems.length) return hideAc();
-  acSel = 0;
-  paintAc(g);
-}
-
-/* Draw `acItems` into the pane's popup at the caret. Extracted from showAc when
-   the mermaid hints arrived: two sources of completions, one painting. */
-function paintAc(g) {
+/* Paint what the engine says, at the caret. The browser-side half of the popup:
+   rows, the selected row, the anchor and the census refresh. A click takes the
+   item through the engine (pick), so mouse and keys share one accept path. */
+function paintHints(g, st) {
   const box = g.acEl;
-  box.innerHTML = "";
-  acItems.forEach((it, i) => {
-    const d = document.createElement("div");
-    d.textContent = it.label;
-    if (it.badge) { const b = document.createElement("span"); b.className = "acb"; b.textContent = it.badge; d.appendChild(b); }
-    if (i === acSel) d.className = "sel";
-    d.onmousedown = e => { e.preventDefault(); acInsert(g, it.ins); };
-    box.appendChild(d);
-  });
-  const [x, y] = caretXY(g);
-  box.style.left = Math.max(0, Math.min(x, g.content.clientWidth - 200)) + "px";
-  box.style.top = Math.min(y, g.content.clientHeight - 60) + "px";
-  box.hidden = false;
-  updateTitle();
-}
-
-function acInsert(g, name) {   // R17: the [[ completion goes through the model; so do mermaid hints
-  if (acKind === "m") Ed.acInsertText(g, acLine, acStart, acEnd, name);
-  else Ed.acInsert(g, acStart, name);
-  hideAc();
-}
-
-/* The popup's INPUT FLOW, defined once, in the editor's keydown order: while
-   the list is up, ↑/↓ move the selection (the caret must not move), Enter/Tab
-   take the item, Escape drops it, and any other printable key ends the word —
-   a space, a bracket or a comma closes the list before it reaches the editor,
-   so the next keystroke is always the one the user meant. Word characters are
-   deliberately NOT intercepted: they keep filtering through the normal doc
-   change (Ed.onUpdate -> showAc). */
-function acKeydown(g, e) {
-  if (g.acEl.hidden) return;
-  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-    e.preventDefault(); e.stopPropagation();
-    acSel = (acSel + (e.key === "ArrowDown" ? 1 : acItems.length - 1)) % acItems.length;
-    [...g.acEl.children].forEach((d, i) => d.className = i === acSel ? "sel" : "");
-  } else if (e.key === "Enter" || e.key === "Tab") {
-    e.preventDefault(); e.stopPropagation();
-    acInsert(g, acItems[acSel].ins);
-  } else if (e.key === "Escape") {
-    e.stopPropagation();
-    hideAc();
-  } else if (acKind === "m" && e.key.length === 1 && !/[\w-]/.test(e.key)) {
-    hideAc();                                   // the word ended: space, punctuation, a quote
+  const open = !!(st && st.phase === "open" && st.items.length);
+  if (open) {
+    box.textContent = "";
+    st.items.forEach((it, i) => {
+      const d = document.createElement("div");
+      d.textContent = it.label;
+      if (it.badge) { const b = document.createElement("span"); b.className = "acb"; b.textContent = it.badge; d.appendChild(b); }
+      if (i === st.sel) d.className = "sel";
+      d.onmousedown = e => { e.preventDefault(); g._hints.pick(i); };
+      box.appendChild(d);
+    });
+    const [x, y] = Ed.caretXY(g);              // R17: the real caret rect, relative to the pane
+    box.style.left = Math.max(0, Math.min(x, g.content.clientWidth - 200)) + "px";
+    box.style.top = Math.min(y, g.content.clientHeight - 60) + "px";
   }
+  const was = !box.hidden;
+  box.hidden = !open;
+  if (open || was) updateTitle();            // the [hint:] census token follows the list
 }
 
-/* Close ONLY the mermaid list — used when the caret moves by itself
-   (arrow, click, Home/End). A [[ completion keeps its old behaviour. */
-function acMmdClose() { if (acKind === "m") hideAc(); }
+const hintsOf = g => (g && g._hints ? g._hints : null);
+/* The one "stop suggesting" verb the rest of the app calls: a tab switch, a
+   mode switch, an intent change. Same reach as the old hideAc — every pane. */
+function hintsCloseAll(why) {
+  for (const g of groups()) { const h = hintsOf(g); if (h) h.close(why || "view"); }
+}
+
+/* census (registered in census.js): the intent ALWAYS, the open list while one
+   is up, with the first candidate — a probe reads what the popup says instead
+   of guessing pixels. */
+function hintTok() {
+  if (!window.HintCore) return "";
+  let s = " [hintmode:" + HintCore.mode() + "]";
+  const h = hintsOf(typeof fg === "function" ? fg() : null);
+  if (!h) return s;
+  const st = h.state();
+  if (st.phase === "open" && st.items.length)
+    s += " [hint:" + st.phase + ":" + st.id + ":" + st.items.length + ":" +
+         String(st.items[st.sel].ins).replace(/[[\]|:\s]/g, "_") + "]";
+  return s;
+}
+
+/* The intent command: ONE palette row for auto -> manual -> off. No bespoke
+   chord (a user binds one in Settings ▸ Hotkeys if they want it); the notice
+   says what changed, because a preference that silently changed is worse than
+   a menu that silently did nothing. Ctrl+Space is the manual invoke. */
+function cmdCycleHints() {
+  if (!window.HintCore) return;
+  const cur = HintCore.mode();
+  const next = HintCore.MODES[(HintCore.MODES.indexOf(cur) + 1) % HintCore.MODES.length];
+  HintCore.settings({ mode: next });
+  hintsCloseAll("intent");
+  say("Completion hints: " + next + (next === "manual" ? " (Ctrl+Space opens the list)" : ""));
+}
 
 /* ---------- commands + keymap (target the focused group) ---------- */
 async function cmdNewNote() {                // new note in a NEW tab of the focused group
@@ -8351,7 +8271,12 @@ function folderMenu(e, f) {                 // right-click an explorer folder ro
    normalised "ctrl+alt+shift+<key>" (e.key lowercased, Mod = Ctrl on Linux).
    User overrides live in hkUser {id: [chords]} ([] = default removed) and are
    persisted to ~/.opensidian.json "hotkeys" in the Obsidian shape. ---------- */
-const edField = () => (state && fg() ? acField(fg()) : null);
+/* The palette's format commands were written against a <textarea>; this picks
+   the textarea-shaped view of the current mode (Ed.field in a CM6 pane, the
+   plain textarea in source mode). NOT the hint engine's host — that reads the
+   model directly (hintHost), so a suggestion never goes through this shim. */
+const fieldOf = g => (g.view && g.view.lines ? Ed.field(g) : g.editor);
+const edField = () => (state && fg() ? fieldOf(fg()) : null);
 function edEdit(fn) {   // fn(value, selStart, selEnd) -> [value, selStart, selEnd]; fires input
   const ta = edField();
   const _t = fg() && fg().active >= 0 ? fg().tabs[fg().active] : null;
@@ -9501,6 +9426,7 @@ const CMDS = [
   ["editor:toggle-italics",    "Toggle italic",                       ["ctrl+i"],               () => edWrap("*")],
   ["markdown:toggle-preview",  "Toggle reading view",                 ["ctrl+e"],               () => cmdToggleMode(), mdActive],   // graphhdr REQ-14: Obsidian offers it only on a markdown view
   ["editor:toggle-source",     "Toggle Live Preview/Source mode",     [],                       () => cmdToggleSource()],
+  ["hints:cycle-intent",       "Cycle completion hints (auto / manual / off)", [],               cmdCycleHints],
   ["workspace:undo-close-pane","Undo close tab",                      ["ctrl+shift+t"],         async () => { await undoCloseTab(); }],
   ["workspace:split-vertical", "Split right",                         [],                       () => splitGroup(fg(), "row", fg().active)],
   ["workspace:split-horizontal","Split down",                         [],                       () => splitGroup(fg(), "col", fg().active)],
@@ -10381,7 +10307,7 @@ async function startGraph(g, cfg) {
   }
   const openT0 = g.perfT0 || perf.now();   // perf: graph_open_settle = open -> kinetic energy below eps
   const sgMs = perf.now() - openT0;     // graphperf: click -> startGraph (0 unless a click time was handed over); v0.6.1 started the lg settle clock HERE, so [sg] lets the A/B compare like with like
-  hideAc();
+  hintsCloseAll();
   g.status.hidden = true;
   g.editor.style.display = "none"; g.preview.style.display = "none";
   g.lp.style.display = "none";
@@ -11660,7 +11586,7 @@ async function enterVault() {
   state = { root: { dir: "row", children: [g], fractions: [1] }, focused: null };
   renderLayout();
   focusGroup(g);
-  hideAc();
+  hintsCloseAll();
   edtBad = Ed.selfTest();            // R17: renderer + token map invariants -> [edt:] census
   await loadVaultCss();              // themefs R3: the vault's own snippet CSS, before first paint of a note
   await refreshTree();
