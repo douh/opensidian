@@ -17,6 +17,7 @@
 | macOS 打包 | `packaging/macos/make-app.sh` 产出 `src-tauri/target/macos/Opensidian.app`（ad-hoc 签名、App Sandbox、原生标题栏与红绿灯按钮） |
 | 界面语言 | 英文 / 简体中文，跟随系统；设置、命令面板、热键页、状态栏等界面文案已本地化 |
 | MCP | `.app` 内含只读的 `opensidian-mcp`（stdio），供任意本地 MCP 客户端读取仓库 |
+| 渲染 | 阅读视图的代码高亮、Mermaid 与公式，以及 Live Preview 里的围栏块（上游尚未实现，见下文「Mermaid：若上游也做了」） |
 | 其余 | 跟随上游（Linux 包、Landlock 自沙盒、插件市场、主题等行为不变） |
 
 ## 安装
@@ -143,6 +144,34 @@ cargo test --locked        # src-tauri/
 大改动的上游合并建议先在临时 worktree 里试合、解决冲突、跑测试，验证后再 `git merge --ff-only` 合入 `macos`。
 
 **回流。** 共生层里与平台无关、对上游也有价值的部分（macOS 的 syscall 映射、`host_js`、界面语言、Live Preview 的围栏与 Mermaid 渲染）以 PR 提交上游；上游不接也照常自用。回流只动代码与测试，**不动** `README.md` 与 `AGENTS.md`——这两份的逐字一致本身就是回流的礼貌。上游改动合并后，跑一遍 `PRERULES.md` §4 的共生自检，确认共生层引用的上游符号还活着。
+
+## Mermaid：若上游也做了，怎么和平合并
+
+上游只留了槽位、没留实现：`ui/plugins/api-functions.js` 的 `loadMermaid` 至今是 `Promise.reject`（注释写 *"still not vendored"*）。本 fork 把这一格填满——`ui/vendor/mermaid/` 的 11.17.2 字节，阅读视图（`main.js` 的 `drawMermaid`）与 Live Preview（`editor.js` 的 `BlockW`）共用同一个实例。上游迟早可能自己实现一版（甚至只做低功能版），所以冲突面与取舍先钉在这里。
+
+冲突面只有四处，且都可预测：
+
+| 位置 | 本 fork 的实现 | 上游若动手时的取舍 |
+|---|---|---|
+| `api-functions.js` 的 `loadMermaid` | 真加载 vendored 字节；`startOnLoad:false`、`securityLevel:"strict"`、按当前主题初始化 | **取上游**；只把 strict / 关自动扫描 / `'self'` 懒加载留下。上游若用 `loose` 或改 CSP 加 eval → **拒绝** |
+| `main.js` 的 `preview()` 后处理 | 一行 `drawMermaid(g.preview, src);` + 两个函数（选择器驱动、`isConnected` 守卫，天然幂等） | 上游自渲染则**取上游**、删我们这两处；`.bad` 兜底与 scratch 节点清理尽量以补丁形式加回 |
+| `editor.js` 的块机制 | `k === "mermaid"` 分支 + `mmdCache`(40) / `mmdPending` / 待定态显示源码 / 高度预估 | 上游做 LP 块 → 用他们的解析与块机制，把我们的缓存、去重、待定态搬过去；上游不做 → 原样保留（这是我们的差异点） |
+| `ui/vendor/mermaid/` | 11.17.2 字节 + `VENDOR.md` / `SHA256SUMS` / `LICENSE` | 上游 vendor → **取上游的版本与字节，删我们的目录**；`VENDOR.md`、`SHA256SUMS`、`THIRD-PARTY.md` 条目按上游的 pin 重写 |
+
+三条底线，任何合并结果都必须仍然成立（功能少可以，质量底线不行）：
+
+1. `securityLevel:"strict"`、无 eval、CSP 里没有裸 `'unsafe-eval'`（只保留既有的 `'wasm-unsafe-eval'`）；
+2. 懒加载（不含 ` ```mermaid ` 的笔记不加载 3.4 MB）与失败兜底（显示源码，不是空盒）；
+3. 平台无关：`frontendDist` 一份字节，`tauri.macos.conf.json` 不覆盖 `csp` 与 `resources`。
+
+这三条已固化为 `src-tauri/tests/mermaid_pin.rs`（8 条断言，含**字节 sha256 实测**）。合并上游后：
+
+```sh
+cargo test --locked --test mermaid_pin   # 红了=某条底线被静默抹掉，读下面板再取舍
+cargo test --locked
+```
+
+测试红不是 bug，是**合并决策**：按上表逐条落定，再手工开一张含 ` ```mermaid ` 的笔记，阅读视图与 Live Preview 各看一眼。若上游只实现低功能版（无兜底、无 LP），我们的取舍是"用他们的渲染路径，把我们的兜底作为小补丁加回"，而不是整段回退。
 
 ## 许可
 
