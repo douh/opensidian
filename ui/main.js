@@ -6859,7 +6859,9 @@ function drawMermaid(P, src) {
         const junk = document.getElementById("d" + id);       // Mermaid leaves its scratch node behind on error
         if (junk) junk.remove();
         box.classList.add("bad");
-        box.textContent = text;
+        box.textContent = text;                                // the source stays: never an empty box
+        const why = window.MmdHints && MmdHints.errText(e);    // …and the parser's own line, so the fix is obvious
+        if (why) { const h = document.createElement("div"); h.className = "mmderr"; h.textContent = why; box.appendChild(h); }
       }
       const pre = c.closest("pre");
       if (pre && pre.isConnected) { pre.replaceWith(box); n++; }
@@ -7024,6 +7026,7 @@ async function updateStatus(g) {
 
 /* ---------- [[ autocomplete (R3.4) ---------- */
 let notesCache = [], acItems = [], acSel = 0, acStart = -1, acKind = "n";
+let acLine = 0, acEnd = -1;      // mermaid hints: the replaced span is a column range on one line
 /* R29: the live-preview engine's image list — the SAME list the Rust renderer
    resolves against (`list_images` hands out `Index::images()` verbatim), so the
    two engines cannot disagree about what `![[pic.png]]` names (R29.7). Loaded
@@ -7034,7 +7037,7 @@ let imgsCache = [];
 function hideAc() {
   const was = acItems.length;
   for (const g of groups()) g.acEl.hidden = true;
-  acItems = []; acStart = -1;
+  acItems = []; acStart = -1; acLine = 0; acEnd = -1; acKind = "n";
   if (was) updateTitle();
 }
 
@@ -7070,9 +7073,38 @@ function caretXY(g) {    // R17: the real caret rect, relative to the pane
   return Ed.caretXY(g);
 }
 
+/* mermaid syntax hints (ui/mermaid-syntax.js): the SAME popup as [[ completion,
+   offered when the caret sits inside a ```mermaid fence. `fenceOf` asks
+   Ed.fenceAt, the very function the live preview uses to decide what is a
+   fence, so the row we complete is always a row the renderer will draw; the
+   vocabulary is checked against the vendored bytes by
+   src-tauri/tests/mermaid_hints.rs. `[[` wins when both could apply — a wiki
+   link inside a node label is still a wiki link. The span is located on the doc
+   LINE (not from the field offset) for the reason the [[ completion learned
+   earlier: an open lp row can shift offsets, a line cannot. */
+function mmdContext(g) {
+  const MH = window.MmdHints;
+  if (!MH || !Ed.fenceAt) return null;
+  const L = Ed.lines(g), s = Ed.sel(g);
+  if (!s || !L.length) return null;
+  const n = s.b.l + 1;                                   // fenceOf counts lines from 1
+  const f = MH.fenceOf({ line: i => ({ text: L[i - 1] || "" }) }, n, L.length);
+  if (!f || f.lang !== "mermaid") return null;
+  if (n <= f.start || (!f.unclosed && n >= f.end)) return null;   // the ``` lines themselves stay quiet
+  const sug = MH.suggest(L.slice(f.start, n - 1), L[s.b.l].slice(0, s.b.c));
+  if (!sug || !sug.items.length) return null;
+  return { l: s.b.l, from: s.b.c - sug.word.length, to: s.b.c, items: sug.items.slice(0, 8) };
+}
+
 async function showAc(g) {
   const ctx = acContext(g);
-  if (!ctx) return hideAc();
+  if (!ctx) {
+    const mm = mmdContext(g);
+    if (!mm) return hideAc();
+    acKind = "m"; acLine = mm.l; acStart = mm.from; acEnd = mm.to; acItems = mm.items;
+    acSel = 0;
+    return paintAc(g);
+  }
   const hi = ctx.q.indexOf("#");
   if (hi >= 0) {
     // R10.4: [[note#  -> that note's headings (level badge); [[note#^ -> its
@@ -7105,9 +7137,15 @@ async function showAc(g) {
       .slice(0, 8)
       .map(([, n]) => ({ ins: n, label: n, badge: "" }));
   }
-  acStart = ctx.start;
+  acStart = ctx.start; acLine = 0; acEnd = -1; acKind = "n";   // a [[ after a mermaid hint must not insert through the line case
   if (!acItems.length) return hideAc();
   acSel = 0;
+  paintAc(g);
+}
+
+/* Draw `acItems` into the pane's popup at the caret. Extracted from showAc when
+   the mermaid hints arrived: two sources of completions, one painting. */
+function paintAc(g) {
   const box = g.acEl;
   box.innerHTML = "";
   acItems.forEach((it, i) => {
@@ -7125,8 +7163,9 @@ async function showAc(g) {
   updateTitle();
 }
 
-function acInsert(g, name) {   // R17: the [[ completion goes through the model
-  Ed.acInsert(g, acStart, name);
+function acInsert(g, name) {   // R17: the [[ completion goes through the model; so do mermaid hints
+  if (acKind === "m") Ed.acInsertText(g, acLine, acStart, acEnd, name);
+  else Ed.acInsert(g, acStart, name);
   hideAc();
 }
 

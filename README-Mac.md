@@ -17,7 +17,7 @@
 | macOS 打包 | `packaging/macos/make-app.sh` 产出 `src-tauri/target/macos/Opensidian.app`（ad-hoc 签名、App Sandbox、原生标题栏与红绿灯按钮） |
 | 界面语言 | 英文 / 简体中文，跟随系统；设置、命令面板、热键页、状态栏等界面文案已本地化 |
 | MCP | `.app` 内含只读的 `opensidian-mcp`（stdio），供任意本地 MCP 客户端读取仓库 |
-| 渲染 | 阅读视图的代码高亮、Mermaid 与公式，以及 Live Preview 里的围栏块（上游尚未实现，见下文「Mermaid：若上游也做了」） |
+| 渲染 | 阅读视图的代码高亮、Mermaid 与公式，以及 Live Preview 里的围栏块；` ```mermaid ` 围栏内还有语法提示与解析错误提示（上游尚未实现，见下文「Mermaid」两节） |
 | 其余 | 跟随上游（Linux 包、Landlock 自沙盒、插件市场、主题等行为不变） |
 
 ## 安装
@@ -172,6 +172,19 @@ cargo test --locked
 ```
 
 测试红不是 bug，是**合并决策**：按上表逐条落定，再手工开一张含 ` ```mermaid ` 的笔记，阅读视图与 Live Preview 各看一眼。若上游只实现低功能版（无兜底、无 LP），我们的取舍是"用他们的渲染路径，把我们的兜底作为小补丁加回"，而不是整段回退。
+
+## Mermaid：围栏里的语法提示
+
+围栏内写图时，两件事有提示：**能写什么**（补全）与**哪儿写错了**（解析错误）。两者共用一份知识源 `ui/mermaid-syntax.js`（普通 `<script>`，在 `main.js` 之前加载），不新增任何 vendored 包——`@codemirror/autocomplete` 与 `@codemirror/lint` 虽已随 `ui/vendor/codemirror/cm6.js` 存在，但 app 的补全一直是自研弹窗（`[[` 链接就是它），再用一套 CM6 扩展只会多出一条并行路径。
+
+- **补全**：光标在 ` ```mermaid ` 围栏内时，`main.js` 的 `mmdContext(g)` 把"围栏哪一行开始/结束、图型是哪一个、正在打的词"算出来，交给既有的 `showAc`/`paintAc` 弹窗（`acKind === "m"`）。围栏头空词列出 26 种图型，`flowchart`/`graph`/`sequenceDiagram` 等之后列出该图型的关键字；`%%` 注释行不弹。选中项经 `Ed.acInsertText` 走编辑器模型替换词本身（一次撤销、同脏标记），不展开模板。
+- **错误**：解析失败时阅读视图与 Live Preview **都**保留源码，并在下面追加一行解析器自己的话（`MmdHints.errText` 把 jison 的 `Parse error on line N: … Expecting …` 压成一行，行号只取自 `hash.loc`，不臆造）。空盒是绝不会出现的失败形态。
+- **真实性**：`HINTS-BEGIN/HINTS-END` 之间的每个字符串都是"词表声明"，`src-tauri/tests/mermaid_hints.rs` 逐条在 `ui/vendor/mermaid/mermaid.min.js` 里查存在——提议 Mermaid 会拒绝的语法比不提更糟。因此 `zenuml`（11.17.2 的解析图里没有该 parser）与 ER 基数符号（压缩后的 lexer 由碎片拼出，无字面量可查）**故意不收**。
+- **自检**：纯函数的场景挂在 `Ed.selfTest()` 里，启动即在真机跑一遍，失败会以 `[edt:mmd:…]` 出现在窗口标题（正常是 `[edt:ok]`）；探针另有 `[mmd:n:首个候选]` 与 `[mmderr:一行错误]` 两个 census token。
+
+真机验证（macOS 探针，非自动化测试）：围栏内输入 `subg` 弹出唯一候选 `subgraph`，回车插入并落盘；空词弹出 8 条 flowchart 关键字；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`。
+
+合并姿态：上游若自带补全，**取上游**的弹窗与词表，我们只把 `errText` 那行错误说明与 `.mmderr` 样式作为小补丁加回；若上游不做，这整块原样保留（`mermaid_hints.rs` 的 8 条断言保证它不会被某次重构顺手删掉）。
 
 ## 许可
 

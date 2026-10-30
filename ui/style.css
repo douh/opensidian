@@ -1537,6 +1537,11 @@ mjx-container { max-width: 100% }
 .lp .code-block pre { margin: 0 }
 .lp .mermaid-block.pending { text-align: start }
 .lp .mermaid-block.pending pre { margin: 0 }
+/* mermaid syntax hint (ui/mermaid-syntax.js errText): the parser's own line under
+   a diagram that would not draw — both views, same caption. Muted, monospace,
+   selectable: copying the message into a bug report is the point of it. */
+:is(.preview, .lp) .mermaid-block .mmderr { margin-top: 0.5em; padding-top: 0.4em; border-top: 1px solid var(--background-modifier-border);
+  color: var(--text-muted); font-size: 0.85em; text-align: start; white-space: pre-wrap; user-select: text }
 /* goal/listlinks — reading view list/link geometry
    (docs/listlinks/recon.md REQ-n). .preview only; live preview untouched. */
 .preview ul > li::before { inset-inline-start: calc(-12.8px - var(--list-bullet-size) / 2) }   /* REQ-1: dot centre = text x - 12.8 */

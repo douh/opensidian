@@ -1127,6 +1127,15 @@ const Ed = {
     if (a < 0) return;
     Ed.replace(g, { a: { l, c: a }, b: { l, c: s.b.c }, empty: false }, "[[" + name + "]]", "ac");
   },
+  /* mermaid hints (ui/main.js mmdContext): replace the column range [c0,c1) on
+     line l with a plain word, through the model — same undo entry, same dirty
+     flag and same save path as typing it. Anchored on the line (not on a
+     field offset) for the reason acInsert above learned first. */
+  acInsertText(g, l, c0, c1, text) {
+    Ed.replace(g, { a: { l, c: Math.max(0, c0) }, b: { l, c: Math.max(0, c1) }, empty: false },
+      String(text == null ? "" : text), "ac");
+    return true;
+  },
   linkClick(e, a) {
     if (typeof wikiClick === "function") wikiClick(e, a);
   },
@@ -1336,6 +1345,31 @@ const Ed = {
         if (eg.view.lines.join("\n") !== want) fail("sel-tab:" + src);
       }
     } finally { Ed.after = oa; Ed.snap = on; }
+    /* Mermaid hints (ui/mermaid-syntax.js). The DATA (diagram names, keywords)
+       is asserted against the vendored bundle by tests/mermaid_hints.rs; what
+       runs here is the pure machinery, on every load, so a broken helper shows
+       up in the title as [edt:mmd:...] instead of waiting for someone to type
+       a fence. `fenceOf` walks the real Ed.fenceAt, so this also proves the
+       completer and the renderer agree on what a mermaid block is. */
+    const MH = window.MmdHints;
+    if (!MH) fail("mmd:absent");
+    else {
+      const dt = ["```mermaid", "flowchart TD", "  A --> B", "```", "", "```js", "x", "```"];
+      const mdoc = { line: i => ({ text: dt[i - 1] || "" }) };
+      const has = (sug, ins) => sug.items.some(it => it.ins === ins);
+      const f1 = MH.fenceOf(mdoc, 3, dt.length), f2 = MH.fenceOf(mdoc, 7, dt.length);
+      if (MH.TYPES.length !== 26 || !has(MH.suggest([], "flow"), "flowchart TD")) fail("mmd:types");
+      if (!f1 || f1.start !== 1 || f1.end !== 4 || f1.lang !== "mermaid" || f1.unclosed) fail("mmd:fence");
+      if (!f2 || f2.lang !== "js") fail("mmd:fencejs");        // the walk stepped over the mermaid fence
+      if (MH.fenceOf(mdoc, 5, dt.length)) fail("mmd:fencegap");// between fences is inside neither
+      if (MH.typeOf(["", "%% c", "graph TD"]).key !== "flowchart") fail("mmd:alias");
+      if (!has(MH.suggest(["flowchart TD"], "  sub"), "subgraph")) fail("mmd:kw");
+      if (!has(MH.suggest(["sequenceDiagram"], "  act"), "actor")) fail("mmd:seq");
+      if (MH.suggest(["flowchart TD"], "%% c").items.length) fail("mmd:comment");
+      const why = MH.errText({ str: "Parse error on line 2:\n... A[Start] -->|open| (\n--------------------^\nExpecting 'X'",
+                               hash: { loc: { first_line: 2 } } });
+      if (!/^line 2: A\[Start\]/.test(why)) fail("mmd:err");
+    }
     return bad;
   },
 };
@@ -2259,7 +2293,7 @@ Ed.lpExt = function (v, G) {
         console.error("[mermaid]", e);
         const junk = document.getElementById("d" + id);       // Mermaid leaves its scratch node behind on error
         if (junk) junk.remove();
-        mmdCache.set(src, { bad: true });
+        mmdCache.set(src, { bad: window.MmdHints ? MmdHints.errText(e) : "parse error" });
       }
       mmdPending.delete(src);
       redraw();
@@ -2345,7 +2379,10 @@ Ed.lpExt = function (v, G) {
         box.className = "mermaid-block";
         const c = mmdCache.get(this.t);
         if (c && c.svg) box.innerHTML = c.svg;
-        else if (c && c.bad) { box.classList.add("bad"); box.textContent = this.t; }
+        else if (c && c.bad) {                     // the source AND the parser's own line: a bad diagram explains itself
+          box.classList.add("bad"); box.textContent = this.t;
+          if (c.bad !== true) { const h = document.createElement("div"); h.className = "mmderr"; h.textContent = c.bad; box.appendChild(h); }
+        }
         else {                                     // the source while the vendored build loads: never an empty box
           box.classList.add("pending");
           const pre = document.createElement("pre");
