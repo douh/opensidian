@@ -7113,14 +7113,23 @@ function paintHints(g, st) {
   if (open || was) updateTitle();            // the [hint:] census token follows the list
 }
 
-/* ADR-8: paint the PASSIVE layer. A glance, not a menu — no row is clickable
-   and no key belongs to it (a list is the insert path, ADR-7). It sits to the
-   right of the caret and flips to the left when the pane has no room; it is
-   gone whenever the engine says there is no ground (outside a fence, a ``` line,
-   a list that is up) — the engine decides all of that, never this function. */
+/* ADR-8/9: paint the mermaid syntax LAYER. A small tree beside the caret —
+   diagram, the kind of place, the kinds of statement, the words for each —
+   and every chip is a tap: the mousedown is swallowed so the editor keeps the
+   caret and the focus, and the insertion goes through the engine
+   (`helpPick`) into the provider, never through a DOM edit. The pane decides
+   nothing about the content (the engine does) and nothing about the levels
+   (ui/mermaid-syntax.js does); it only lays them out. It sits to the right of
+   the caret and flips left when the pane has no room, and it is gone whenever
+   the engine says there is no ground (outside a fence, a ``` line, a list
+   that is up). */
 function paintHelp(g, st) {
   const box = g && g.helpEl;
   if (!box) return;
+  // The card is now clickable (ADR-9), so a mousedown anywhere on it must not
+  // take the focus out of the editor: only chips act, and a caption or blank
+  // area is not a target at all (the same swallow the chips do, one level up).
+  box.onmousedown = e => e.preventDefault();
   const h = st && st.help;
   if (h) {
     box.textContent = "";
@@ -7134,29 +7143,59 @@ function paintHelp(g, st) {
       place.textContent = i18n.t(h.place);
       box.appendChild(place);
     }
-    const words = document.createElement("div");
-    words.className = "mh-words";
-    h.items.forEach(it => {
-      const w = document.createElement("span");
-      w.className = "mh-w";
-      w.textContent = it.label;
-      words.appendChild(w);
+    const secs = h.sections && h.sections.length ? h.sections : [{ name: "", items: h.items }];
+    secs.forEach(sec => {
+      if (sec.name) {
+        const cap = document.createElement("div");
+        cap.className = "mh-sec";
+        cap.textContent = i18n.t(sec.name);
+        box.appendChild(cap);
+      }
+      const words = document.createElement("div");
+      words.className = "mh-words";
+      sec.items.forEach(it => {
+        const w = document.createElement("span");
+        const tap = typeof it.ins === "string" && it.ins.length > 0;
+        w.className = tap ? "mh-w tap" : "mh-w";
+        w.textContent = it.label;
+        if (tap) {                             // a chip inserts; a passive token is only a word
+          w.onmousedown = e => { e.preventDefault(); e.stopPropagation(); g._hints.helpPick(it); };
+        }
+        words.appendChild(w);
+      });
+      box.appendChild(words);
     });
-    box.appendChild(words);
     const [x, y] = Ed.caretXY(g);
     const w = box.offsetWidth || 240, wide = g.content.clientWidth;
     box.style.left = (x + 24 + w > wide ? Math.max(0, x - w - 12) : x + 24) + "px";
     const top = Math.max(0, Math.min(y + 6, g.content.clientHeight - 40));
     box.style.top = top + "px";
-    // the card takes no pointer events (it floats over live text), so it must
-    // fit on its own: size it to the room below the caret instead of a fixed
-    // cap — the type chooser is 26 chips and a 240px cap cut its last row.
+    // the card fits the room the caret leaves, so a 26-chip chooser never ends
+    // under a scrollbar it cannot reach (measured 2026-10-31)
     box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12) + "px";
   }
   const was = !box.hidden;
   box.hidden = !h;
   if (h || was) updateTitle();               // [hinthelp:] follows the layer
 }
+
+/* ADR-9: the flowchart tables (ui/hint-nav.json, 69 KB) turn the layer's last
+   levels from a keyword list into the grammar's own answer at the caret. They
+   are optional: without the file the layer falls back to the verified keyword
+   groups, so a failure here costs detail, never the panel. */
+function loadHintNav() {
+  if (!window.HintNav || window.HintNav.ready() || typeof fetch !== "function") return;
+  fetch("hint-nav.json")
+    .then(r => (r && r.ok ? r.text() : ""))
+    .then(t => {
+      if (!t || !window.HintNav.load(t)) return;
+      // the layer that is up was answered without the tables; redraw it where
+      // it stands (the caret has not moved, so nothing else would)
+      for (const g of groups()) if (g._hints) g._hints.reanchor();
+    })
+    .catch(() => { /* no tables: the keyword groups still answer */ });
+}
+loadHintNav();
 
 const hintsOf = g => (g && g._hints ? g._hints : null);
 /* The one "stop suggesting" verb the rest of the app calls: a tab switch, a

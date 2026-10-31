@@ -729,21 +729,27 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
           border-radius: 4px }
 .ac div.sel, .ac div:hover { background: var(--border) }
 
-/* ADR-8: the passive mermaid layer. A glance beside the caret, never a menu:
-   no row reacts to the mouse and no key is claimed — and (unlike the .ac list,
-   z-index 6) it takes no click either, so the caret's rectangle underneath
-   stays clickable while the card floats over it. Dimmer than .ac on purpose:
-   the list is the thing you act on, this is the map. */
+/* ADR-8/9: the mermaid syntax layer. It is a TREE (diagram -> kind of place ->
+   kind of statement -> the words that may come next) and its chips are taps:
+   mousedown is swallowed by the pane (see paintHelp), so the click never moves
+   the caret and never steals the focus, and the insertion happens through the
+   engine. It sits below the .ac list in z (5 vs 6) because the list is the
+   thing you are picking from when both are up; it only takes clicks on the
+   card itself, not on the pane underneath. */
 .mmdhelp { position: absolute; z-index: 5; max-width: 320px;
            overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border);
            border-radius: 6px; padding: 8px 10px; font-size: 12px; opacity: .97;
-           box-shadow: 0 2px 8px rgba(0,0,0,.18); pointer-events: none; user-select: none }
+           box-shadow: 0 2px 8px rgba(0,0,0,.18); pointer-events: auto; user-select: none }
 .mmdhelp[hidden] { display: none }
 .mh-type { font-weight: 600; margin-bottom: 2px; white-space: nowrap }
 .mh-place { color: var(--text-chrome-dim); margin-bottom: 6px; font-size: 11px }
+.mh-sec { color: var(--text-chrome-dim); margin: 6px 0 3px; font-size: 11px;
+          letter-spacing: .02em }
 .mh-words { display: flex; flex-wrap: wrap; gap: 4px 6px }
 .mh-w { padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
         white-space: nowrap; font-family: var(--font-monospace) }
+.mh-w.tap { cursor: pointer }
+.mh-w.tap:hover { background: var(--border) }
 
 /* status bar */
 .status { position: absolute; right: 10px; bottom: 8px; display: flex;

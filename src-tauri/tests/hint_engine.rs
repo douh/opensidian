@@ -195,26 +195,48 @@ fn a_late_answer_never_paints_a_stale_list() {
 }
 
 #[test]
-fn the_context_layer_is_passive_and_follows_the_caret() {
+fn the_context_layer_is_a_tree_and_its_chips_land_in_the_model() {
     // ADR-8 (2026-10-31): inside mermaid ground a second surface says what the
     // diagram is and which words are legal where the caret stands. It owns no
-    // key, inserts nothing and never opens a list: it is recomputed by the
-    // engine on every caret move (`syncHelp` from `sense`), published in the
-    // snapshot, painted by one function, and suppressed while a list is up
-    // (the list already says what may be taken). The intent still wins: only
-    // `auto` raises it, `manual`/`off` stay quiet.
+    // key, opens no list and is recomputed by the engine on every caret move
+    // (`syncHelp` from `sense`), painted by one function, and suppressed while a
+    // list is up (the list already says what may be taken). Only `auto` raises
+    // it: `manual`/`off` stay quiet.
+    //
+    // ADR-9 (2026-10-31): the surface is a TREE and its chips are taps. The
+    // levels change with the caret's grammar ground (diagram -> kind of place ->
+    // kind of statement -> the terminals the parser expects), and a tap goes
+    // through the engine's `helpPick` into the provider's `panelCommit`, which
+    // lands the text with the host's model `replace` — completing the word under
+    // the caret or inserting at it. Nothing here owns a key or edits the DOM.
     assert_has("ui/hint-core.js", &[
         "function syncHelp() {",
         "if (use() === \"auto\" && st.phase !== \"open\") { // a list already says what may be taken",
         "help: st.help ? { id: st.help.id, type: st.help.type, place: st.help.place,",
+        "sections: st.help.sections.map(s => ({ name: s.name, items: s.items.slice() })),",
         "function follow() { syncHelp(); return !!st.help; }",
         "const r = step(input);",
         "// the panel is anchored to the caret too",
-        "follow, key, pick",
+        "function panelFor(ctx) {",
+        "function helpPick(it) {",
+        "helpPick, accept: () => pick(st.sel)",
     ]);
-    // Nothing in the layer may write: no pick path for `help` at all.
-    assert_lacks("ui/hint-core.js", &["helpPick", "st.help.items[i]"]);
-    assert_has("ui/hint-mermaid.js", &["panel(ctx) {", "return M.helpOf("]);
+    assert_has("ui/hint-mermaid.js", &[
+        "return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before, window.HintNav);",
+        "panelCommit(it, ctx, host) {",
+        "host.replace({ l: ctx.l, from: ctx.c - w.word.length, to: ctx.c }, it.ins);",
+        "host.replace({ l: ctx.l, from: ctx.c, to: ctx.c }, pad + it.ins);",
+    ]);
+    // The tree's levels are L0 data: the section names, the keyword groups and
+    // the grammar tables' terminals all live in ui/mermaid-syntax.js.
+    assert_has("ui/mermaid-syntax.js", &[
+        "const SECTION = {",
+        "function kwSections(key, depth) {",
+        "const NAVTOK = {",
+        "function navSections(prev, prefix, nav) {",
+        "function helpOf(prev, prefix, nav) {",
+        "function joins(ins) {",
+    ]);
     assert_has("ui/main.js", &[
         "function paintHelp(g, st) {",
         "g.helpEl = q(\".mmdhelp\");",
@@ -222,18 +244,29 @@ fn the_context_layer_is_passive_and_follows_the_caret() {
         "[hinthelp:",
         "head.textContent = h.type || i18n.t(\"Choose a diagram type\");",
         "place.textContent = i18n.t(h.place);",
-        // a pointer-dead card cannot be scrolled, so its height follows the room
-        // the caret leaves (a fixed 240px cap cut the type chooser's last row)
+        "cap.textContent = i18n.t(sec.name);",
+        // the click is swallowed, so the caret and the focus stay in the editor
+        "box.onmousedown = e => e.preventDefault();",
+        "w.onmousedown = e => { e.preventDefault(); e.stopPropagation(); g._hints.helpPick(it); };",
+        // the flowchart tables are optional: without them the keyword groups answer
+        "function loadHintNav() {",
+        "fetch(\"hint-nav.json\")",
+        // a pointer-live card must fit the room the caret leaves, or its last
+        // rows hide under a scrollbar it cannot reach
         "box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12)",
     ]);
-    // passive by construction: no pointer target (the card floats over text the
-    // user may still be clicking into) and no vocabulary of its own to insert
-    assert_has("ui/style.css", &[".mmdhelp {", "pointer-events: none", ".mh-words {"]);
+    assert_has("ui/style.css", &[".mmdhelp {", "pointer-events: auto", ".mh-sec {", ".mh-w.tap:hover"]);
     // and the layer is proven on every launch, not only here
     assert_has("ui/editor.js", &[
         "fail(\"help:types\")", "fail(\"help:vocab\")", "fail(\"help:block\")",
         "fail(\"help:list\")", "fail(\"help:intent\")",
+        "fail(\"help:sections\")", "fail(\"help:nav2\")", "fail(\"help:arrow\")",
+        "fail(\"help:tap2\")", "fail(\"help:tapreplace2\")", "fail(\"help:tapattach\")",
+        "fail(\"help:pad\")",
     ]);
+    // The engine still never touches a node, and the layer still has no vocabulary
+    // of its own: every word comes from L0.
+    assert_lacks("ui/hint-core.js", &["document", "createElement", "subgraph", "sequenceDiagram"]);
 }
 
 #[test]

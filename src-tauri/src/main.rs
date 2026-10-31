@@ -3705,8 +3705,13 @@ fn csp_by_trust(header: &str, trusted: bool) -> String {
                 media = true;
                 out.push(format!("{d} blob:"));
             }
-            // the synchronous fs route (vfs_sync) is same-origin
-            "connect-src" => out.push(format!("{d} 'self'")),
+            // the synchronous fs route (vfs_sync) is same-origin; the config
+            // already names 'self' for ui/hint-nav.json (ADR-9), so never repeat it
+            "connect-src" => out.push(if d.split_whitespace().any(|t| t == "'self'") {
+                d.to_string()
+            } else {
+                format!("{d} 'self'")
+            }),
             _ => out.push(d.to_string()),
         }
     }
@@ -9847,7 +9852,7 @@ mod tests {
             csp,
             "default-src 'self'; script-src 'self' opensidian-plugin: 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; \
              img-src 'self' data: opensidian-img:; font-src 'self'; \
-             connect-src ipc: http://ipc.localhost",
+             connect-src ipc: http://ipc.localhost 'self'",
             "the CSP changed — if that was deliberate, say why in the commit message"
         );
         // af-fix 1a: the config (= a restricted page) names no media-src: media is default-src 'self',

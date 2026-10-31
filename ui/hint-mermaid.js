@@ -40,16 +40,41 @@
       return M.statementStart(ctx.before.slice(0, w.from));
     },
     trigger(typed) { return M.wordChar(typed); },
-    /* ADR-8: the passive syntax layer. It answers for the whole fence body
-       rather than for the word under the caret, and it is available wherever
-       that caret is INSIDE the body — the ``` lines stay quiet, because a
-       directive inserted on a fence line would edit the fence itself. */
+    /* ADR-8/9: the syntax layer. It answers for the whole fence body rather
+       than for the word under the caret, and it is available wherever that
+       caret is INSIDE the body — the ``` lines stay quiet, because a directive
+       inserted on a fence line would edit the fence itself. `window.HintNav`
+       is handed over as data (L0 stays global-free): for flowchart the last
+       levels are the grammar's own answer at this caret, for every other
+       diagram the verified keyword groups. */
     panel(ctx) {
       const f = ctx.fence;
       if (!f || f.lang !== "mermaid") return null;
       const n = ctx.l + 1;                  // M.fenceOf counts lines from 1
       if (n <= f.start || (!f.unclosed && n >= f.end)) return null;
-      return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before);
+      return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before, window.HintNav);
+    },
+    /* ADR-9: a chip is tappable. The click reaches here through the engine
+       (helpPick), so mouse and keyboard share one insertion path — the model's
+       `replace`, one line, one undo step. A word the item COMPLETES is replaced
+       (typing `su` then tapping `subgraph`); on the directive line the word is
+       replaced whatever it says (tapping another diagram); anything else is
+       inserted at the caret, with a space only when a word would otherwise
+       fuse with the word before it (`A` + `-->` stays `A-->`). */
+    panelCommit(it, ctx, host) {
+      if (!it || typeof it.ins !== "string" || !it.ins) return false;
+      const f = ctx.fence, w = M.wordAt(ctx.before);
+      const body = f ? ctx.lines.slice(f.start, ctx.l) : [];
+      const onTypeLine = !M.typeOf(body);
+      const replace = w && M.statementStart(ctx.before.slice(0, w.from)) &&
+        (onTypeLine || it.ins.toLowerCase().startsWith(w.word.toLowerCase()));
+      if (replace) {
+        host.replace({ l: ctx.l, from: ctx.c - w.word.length, to: ctx.c }, it.ins);
+        return true;
+      }
+      const pad = M.joins(it.ins) && /[A-Za-z0-9_)\]}]$/.test(ctx.before) ? " " : "";
+      host.replace({ l: ctx.l, from: ctx.c, to: ctx.c }, pad + it.ins);
+      return true;
     },
     offer(ctx) {
       const f = ctx.fence, w = M.wordAt(ctx.before);

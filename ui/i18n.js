@@ -361,6 +361,15 @@
     "Choose a diagram type": "选择图表类型",
     "Top-level statement": "顶层语句",
     "Inside a block": "块内（用 end 收尾）",
+    /* ADR-9: the tree's section headings (the words under them are syntax). */
+    "Statements": "语句",
+    "Blocks": "块",
+    "Directives": "指令",
+    "Arrow style": "连线箭头",
+    "Nodes": "节点",
+    "Shapes": "形状",
+    "Links": "连线",
+    "Edge labels": "连线文字",
   };
 
   /* Strings the app builds at runtime carry a number: "Version 0.9.0",

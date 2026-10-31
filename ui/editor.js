@@ -1472,6 +1472,69 @@ const Ed = {
       const e18 = HC.create(host(["```mermaid", "flowchart TD", "", "```"], 0, 0), { mode: "auto" });
       e18.follow();
       if (e18.state().help) fail("help:outside");        // the ``` line stays quiet
+      /* ADR-9: the layer is a TREE, not one row of words. Level 3 is the kind
+         of statement, and it changes with the ground: a flowchart line offers
+         statements and directives, a block body adds `end`, and where the
+         grammar tables are loaded the levels are the parser's own expected
+         terminals at the caret (flowchart only; the rest keep the keyword
+         groups). The chips are TAPS: one goes through the engine's `helpPick`
+         into the provider's `replace`, so the text lands in the model — a word
+         the chip completes is replaced, anything else is inserted at the caret
+         (`A` + `-->` fuses, `A` + `direction LR` takes a space). */
+      const e20 = HC.create(host(["```mermaid", "flowchart TD", "", "```"], 2, 0), { mode: "auto" });
+      e20.follow();
+      const hs = e20.state().help;
+      // sections are the tree's level 3 — present whether or not the grammar
+      // tables finished loading (a fetch may land before or after this test)
+      if (!hs || !hs.sections.length) fail("help:sections");
+      if (!hs.items.length || hs.sections.length > hs.items.length) fail("help:sections2");
+      if (hs.sections.some(s => s.items.some(it => it.ins === "end"))) fail("help:sections3");
+      if (!MH || typeof MH.helpOf !== "function" || !MH.SECTION || !MH.NAVTOK) fail("help:exports");
+      // without the tables the verified keyword groups still say the two levels
+      // (this is the fallback, tested with an explicitly absent nav)
+      const kw = MH.helpOf(["flowchart TD"], "", null);
+      if (!kw.sections.some(s => s.name === "Statements") ||
+          !kw.sections.some(s => s.name === "Directives")) fail("help:kw");
+      const navAt = exp => ({ at: () => ({ verdict: "prefix", expected: exp }), chars: () => ({ link: [] }) });
+      const navArrow = link => ({ at: () => ({ verdict: "prefix", expected: [] }), chars: () => ({ link }) });
+      const nv = MH.helpOf(["flowchart TD"], "", navAt(["LINK", "PIPE", "subgraph", "direction_lr"]));
+      if (!nv || nv.sections.length !== 4) fail("help:nav");
+      if (nv.sections[0].name !== "Links" || nv.sections[0].items[0].ins !== "-->" ||
+          nv.sections[1].name !== "Edge labels" || nv.sections[1].items[0].ins !== "|text|" ||
+          nv.sections[2].name !== "Blocks" || nv.sections[2].items[0].ins !== "subgraph" ||
+          nv.sections[3].name !== "Directives" || nv.sections[3].items[0].ins !== "direction LR") fail("help:nav2");
+      const av = MH.helpOf(["flowchart TD", "A"], "", navArrow(["o", "x", ">", "-"]));
+      if (!av || av.sections.length !== 1 || av.sections[0].name !== "Arrow style") fail("help:arrow");
+      if (av.sections[0].items.map(x => x.ins).join("") !== "ox>-") fail("help:arrow2");
+      if (av.sections[0].items[0].label !== "--o") fail("help:arrow3");
+      // prose gets no tree: a label being typed (`A[`) and free edge text are
+      // where the user writes words, so the grammar's token list must not offer
+      // a node chip there — the layer steps aside (or keeps the keyword groups)
+      const navText = { at: () => ({ verdict: "prefix", lex: { top: "text" }, expected: ["UNICODE_TEXT"] }),
+                        chars: () => ({ link: [] }) };
+      const pt = MH.helpOf(["flowchart TD"], "A[", navText);
+      if (pt && pt.sections.some(s => s.items.some(it => it.ins === "B"))) fail("help:prose");
+      const navEdge = { at: () => ({ verdict: "prefix", lex: { top: "edgeText" }, expected: ["UNICODE_TEXT"] }),
+                        chars: () => ({ link: ["-", ">"] }) };
+      const et = MH.helpOf(["flowchart TD"], "A--", navEdge);
+      if (!et || et.sections.length !== 1 || et.sections[0].name !== "Arrow style" ||
+          et.sections[0].items.some(it => it.ins === "B")) fail("help:prose2");
+      const h1 = host(["```mermaid", "", "```"], 1, 0), t1 = HC.create(h1, { mode: "auto" });
+      t1.follow();
+      if (!t1.helpPick({ ins: "sequenceDiagram", label: "sequenceDiagram" })) fail("help:tap");
+      if (h1.did.length !== 1 || h1.did[0].text !== "sequenceDiagram" || h1.lines()[1] !== "sequenceDiagram") fail("help:tap2");
+      const h2 = host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), t2 = HC.create(h2, { mode: "auto" });
+      t2.follow();
+      if (!t2.helpPick({ ins: "subgraph", label: "subgraph" })) fail("help:tapreplace");
+      if (h2.did[0].from !== 0 || h2.did[0].to !== 2 || h2.lines()[2] !== "subgraph") fail("help:tapreplace2");
+      const h3 = host(["```mermaid", "flowchart TD", "A", "```"], 2, 1), t3 = HC.create(h3, { mode: "auto" });
+      t3.follow();
+      if (!t3.helpPick({ ins: "-->", label: "-->" }) || h3.lines()[2] !== "A-->") fail("help:tapattach");
+      const h4 = host(["```mermaid", "flowchart TD", "A", "```"], 2, 1), t4 = HC.create(h4, { mode: "auto" });
+      t4.follow();
+      if (!t4.helpPick({ ins: "direction LR", label: "direction LR" }) ||
+          h4.lines()[2] !== "A direction LR") fail("help:pad");
+      if (e17.helpPick({ ins: "end", label: "end" })) fail("help:tapoff");   // a chip with no layer does nothing
       // an answer that arrives after the caret moved must be dropped, not painted
       const pend = [];
       HC.register({ id: "self:async", priority: 1, match: () => true, trigger: () => true,

@@ -86,7 +86,8 @@ fn the_module_is_a_classic_script_loaded_before_main() {
     assert!(vocab < prov, "the vocabulary must load BEFORE the provider that reads it");
     assert!(prov < main, "the providers must load BEFORE main.js (it registers the host)");
     assert_has("ui/mermaid-syntax.js",
-        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, helpOf, errText }"]);
+        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest,",
+          "helpOf, joins, SECTION, NAVTOK, errText };"]);
 }
 
 #[test]
@@ -159,27 +160,54 @@ fn a_broken_diagram_explains_itself_in_both_views() {
 
 #[test]
 fn the_context_layer_speaks_the_same_vocabulary() {
-    // ADR-8: the passive layer must never invent syntax either. Its items are
-    // drawn from TYPES/KW (the two tables this file checks against the vendored
-    // bundle), its `place` values are i18n keys, and the provider only decides
-    // WHEN to ask — the layer owns no insertion path, so a wrong word could
-    // never be written into a note.
+    // ADR-8: the layer must never invent syntax either — its words are drawn
+    // from TYPES/KW, the two tables this file checks against the vendored bundle,
+    // and its `place` values are i18n keys.
+    //
+    // ADR-9: it is a TREE, and the extra levels are still not invented. The
+    // section captions are only names over those same tables; a flowchart's last
+    // levels are the compiled flow.jison tables (ui/hint-nav.json) — the parser
+    // itself — and anything the tables cannot name falls back to the verified
+    // keyword groups rather than to a guess.
     assert_has("ui/mermaid-syntax.js", &[
-        "function helpOf(prev, prefix) {",
+        "function helpOf(prev, prefix, nav) {",
         "const OPENERS = {",
         "const INNER = [\"end\", \"else\", \"and\"];",
+        "const SECTION = {",
+        "function kwSections(key, depth) {",
+        "if (depth === 0 && INNER.indexOf(k) >= 0) continue;",
+        "const NAVTOK = {",
+        "function navSections(prev, prefix, nav) {",
+        "if (!sections) sections = kwSections(d.key, depth);",
         // the chooser says nothing twice: its heading IS "Choose a diagram type"
-        "return { type: \"\", place: \"\",",
-        "place: depth > 0 ? \"Inside a block\" : \"Top-level statement\", items };",
-        ".filter(k => depth > 0 || INNER.indexOf(k) < 0)",
+        "return { type: \"\", place: \"\", sections: [{ name: \"\", items }], items };",
+        "place: depth > 0 ? \"Inside a block\" : \"Top-level statement\", sections, items };",
+        "helpOf, joins, SECTION, NAVTOK, errText };",
     ]);
     assert_has("ui/hint-mermaid.js", &[
         "panel(ctx) {",
         "if (n <= f.start || (!f.unclosed && n >= f.end)) return null;",
-        "return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before);",
+        "return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before, window.HintNav);",
+        "panelCommit(it, ctx, host) {",
+        r#"const pad = M.joins(it.ins) && /[A-Za-z0-9_)\]}]$/.test(ctx.before) ? " " : "";"#,
     ]);
     assert_has("ui/i18n.js", &["\"Choose a diagram type\": \"选择图表类型\"",
-        "\"Top-level statement\": \"顶层语句\"", "\"Inside a block\": \"块内（用 end 收尾）\""]);
+        "\"Top-level statement\": \"顶层语句\"", "\"Inside a block\": \"块内（用 end 收尾）\"",
+        "\"Statements\": \"语句\"", "\"Arrow style\": \"连线箭头\"", "\"Links\": \"连线\""]);
+    // The tables are DATA, not code: the JSON carries its provenance (mermaid and
+    // jison versions, the grammar's sha256) so a bump cannot silently diverge.
+    let nav = read("ui/hint-nav.json");
+    assert!(nav.contains("\"sha256\""), "ui/hint-nav.json must carry the grammar's sha256 in its meta");
+    assert!(nav.contains("\"jison\":\"0.4.18\"") || nav.contains("\"jison\": \"0.4.18\""),
+        "ui/hint-nav.json must pin the jison version it was compiled with");
+    // The tables load with a same-origin fetch (main.js), and connect-src is
+    // otherwise closed to everything but IPC. Without 'self' the fetch is blocked
+    // and every flowchart level silently falls back to the keyword groups
+    // (measured on the real app 2026-10-31).
+    let csp = read("src-tauri/tauri.conf.json");
+    assert!(csp.contains("connect-src ipc: http://ipc.localhost 'self'"),
+        "the CSP no longer allows fetching ui/hint-nav.json; the grammar levels would fall back to keywords");
+    assert!(!csp.contains("connect-src * "), "connect-src widened to the whole web — the tables need 'self' only");
 }
 
 #[test]

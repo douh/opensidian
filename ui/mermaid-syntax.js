@@ -151,17 +151,25 @@
     return { word, from, items: items.slice(0, MAX) };
   }
 
-  /* ---------- ADR-8: the context layer ----------
-     A caret inside a fence gets a PASSIVE panel: which diagram this is, what
-     kind of place the caret stands in, and the words that are legal there. It
-     never inserts (that is the list's job, and the list is key-driven), so the
-     panel may appear where prose lives (a node label, an edge caption) without
-     rewriting anything.
+  /* ---------- ADR-8 / ADR-9: the context layer ----------
+     A caret inside a fence gets a panel that is a TREE, not one flat row: which
+     diagram this is, what kind of place the caret stands in (level 2), what
+     kind of statement may begin there (level 3), and the words for it (level 4).
 
-     The items are ALWAYS drawn from TYPES or KW — the same strings
-     tests/mermaid_hints.rs checks against the vendored bundle — so the panel
-     cannot teach a word Mermaid rejects. `place` is an i18n key (ui/i18n.js
-     holds the translation); nothing here knows about a language. */
+     Level 3/4 for `flowchart` come from the grammar itself: ui/hint-nav.json
+     holds the lexer + LALR tables the vendored build ships (compiled by
+     tools/gen-hint-nav.js), so the answer at the caret is "the grammar expects
+     LINK / subgraph / direction_lr HERE", not a guess from the keyword list.
+     The data is passed in as `nav` (the provider hands window.HintNav over) —
+     this file stays free of app globals and the self test can drive the mapping
+     with a fake. Without the tables, or for every other diagram, the verified
+     keyword list is grouped into statements / blocks / directives.
+
+     The items are ALWAYS drawn from TYPES, KW or the grammar's own terminals —
+     the same strings tests/mermaid_hints.rs checks against the vendored bundle
+     — so the panel cannot teach a word Mermaid rejects. `place` and section
+     names are i18n keys (ui/i18n.js holds the translations); nothing here
+     knows about a language. */
   const OPENERS = {                 // typeKey -> what opens a nested body, and what closes it
     flowchart: { open: /^subgraph\b/, close: /^end\b/ },
     sequence: { open: /^(?:loop|alt|opt|par|critical|break|rect|box)\b/, close: /^end\b/ },
@@ -187,10 +195,119 @@
     return d;
   }
 
-  /* {type, place, items} for a caret ending `prefix`, with the body above it.
-     Empty of a directive => the whole type list (that IS the newcomer's first
-     question). `type` is the directive as typed (`graph` stays `graph`). */
-  function helpOf(prev, prefix) {
+  /* {type, place, sections, items} for a caret ending `prefix`, with the body
+     above it. Empty of a directive => the whole type list (that IS the
+     newcomer's first question). `type` is the directive as typed (`graph` stays
+     `graph`). `items` is the flat union of the sections (census, tests). */
+
+  /* Level 3: the kind of statement. The heading of a group is an i18n key. */
+  const SECTION = {
+    stmt: "Statements", block: "Blocks", dir: "Directives",
+    arrow: "Arrow style", node: "Nodes", shape: "Shapes",
+    edge: "Links", label: "Edge labels",
+  };
+  /* Keywords that read like a setting rather than a statement. `class` is a
+     statement in classDiagram and a style directive in flowchart, so the two
+     diagrams that disagree get an override instead of a wrong caption. */
+  const DIRECTIVE = /^(?:direction|style|classDef|class|click|linkStyle|href|cssClass|namespace|callback|link|title|dateFormat|axisFormat|tickInterval|excludes|todayMarker|showData|textPosition|autonumber|accTitle|accDescr|::)/;
+  const SEC_OVERRIDE = { class: { class: "stmt", namespace: "stmt", callback: "stmt", link: "stmt" } };
+
+  function secOf(key, k) {
+    const o = SEC_OVERRIDE[key];
+    if (o && o[k]) return o[k];
+    if (INNER.indexOf(k) >= 0) return "block";
+    return DIRECTIVE.test(k) ? "dir" : "stmt";
+  }
+
+  /* The verified keyword table, grouped. `end`/`else`/`and` are a syntax error
+     at the top level, so they are offered only inside a block. */
+  function kwSections(key, depth) {
+    const bags = { stmt: [], block: [], dir: [] };
+    for (const k of (KW[key] || [])) {
+      if (depth === 0 && INNER.indexOf(k) >= 0) continue;
+      bags[secOf(key, k)].push({ ins: k, label: k });
+    }
+    const out = [];
+    for (const id of ["stmt", "block", "dir"])
+      if (bags[id].length) out.push({ name: SECTION[id], items: bags[id] });
+    return out;
+  }
+
+  /* The grammar's terminals, said in a user's words. Flowchart only: that is
+     the one diagram whose tables are shipped. `ins` is the text a tap lands
+     (null = the token is prose, shown but not tappable). */
+  const NAVTOK = {
+    NODE_STRING: ["node", "B", "B"],
+    UNICODE_TEXT: ["node", "B", "B"],
+    NUM: ["node", "B", "B"],
+    AMP: ["node", "&", "&"],
+    BRKT: ["shape", "[", "[ … ]"],
+    PS: ["shape", "(", "( … )"],
+    SQS: ["shape", "[", "[ … ]"],
+    CYLINDERSTART: ["shape", "[(", "[("],
+    DOUBLECIRCLESTART: ["shape", "((", "(("],
+    DIAMOND_START: ["shape", "{", "{ … }"],
+    STADIUMSTART: ["shape", "([", "(["],
+    SUBROUTINESTART: ["shape", "[[", "[["],
+    TRAPSTART: ["shape", "[/", "[/"],
+    INVTRAPSTART: ["shape", "[\\", "[\\"],
+    LINK: ["edge", "-->", "-->"],
+    MINUS: ["edge", "--", "--"],
+    MULT: ["edge", "==", "=="],
+    START_LINK: ["edge", "--", "--"],
+    PIPE: ["label", "|text|", "|text|"],
+    subgraph: ["block", "subgraph", "subgraph"],
+    end: ["block", "end", "end"],
+    STYLE: ["dir", "style", "style"],
+    CLASSDEF: ["dir", "classDef", "classDef"],
+    CLICK: ["dir", "click", "click"],
+    LINKSTYLE: ["dir", "linkStyle", "linkStyle"],
+    direction_lr: ["dir", "direction LR", "direction LR"],
+    direction_tb: ["dir", "direction TB", "direction TB"],
+    direction_bt: ["dir", "direction BT", "direction BT"],
+    direction_rl: ["dir", "direction RL", "direction RL"],
+    direction_td: ["dir", "direction TD", "direction TD"],
+  };
+
+  /* The grammar's answer for the caret, as sections. `at` says which terminals
+     the parser expects; `chars` says which CHARACTERS still complete the
+     arrow being typed (`A--` + o/x/>/-), which the table alone cannot answer
+     because the lexer already swallowed the arrow. Returns the sections, `false`
+     when the caret is inside PROSE — a node's label (`A[…`), a link's label
+     (`|…|`) or free edge text (`A -- te|xt`), where the user writes words and a
+     token list would only be pasted into a sentence — or null when there is
+     nothing useful (the type chooser's job, a dead prefix, a token nobody can
+     name), which lets the caller fall back to the keyword groups. */
+  function navSections(prev, prefix, nav) {
+    if (!nav || typeof nav.at !== "function") return null;
+    const pre = (prev.length ? prev.join("\n") + "\n" : "") + prefix;
+    let a = null, c = null;
+    try { a = nav.at(pre); } catch (_) { return null; }
+    try { c = typeof nav.chars === "function" ? nav.chars(pre) : null; } catch (_) { c = null; }
+    if (!a || a.verdict !== "prefix") return null;
+    const cond = a.lex && a.lex.top;
+    if (cond === "text") return false;                       // a label being typed: prose
+    const bags = {};
+    const push = (sec, ins, label) => {
+      const b = bags[sec] || (bags[sec] = []);
+      if (!b.some(x => x.ins === ins)) b.push({ ins, label });
+    };
+    if (c && Array.isArray(c.link))
+      for (const ch of c.link) push("arrow", ch, "--" + ch);
+    const edgeText = cond === "edgeText";                 // after `A--`: arrow characters only
+    if (edgeText && !(bags.arrow && bags.arrow.length)) return false;   // free edge text: prose
+    if (!edgeText)
+      for (const t of (a.expected || [])) {
+        const m = NAVTOK[t];
+        if (m) push(m[0], m[1], m[2]);
+      }
+    const out = [];
+    for (const id of ["arrow", "node", "shape", "edge", "label", "block", "dir"])
+      if (bags[id] && bags[id].length) out.push({ name: SECTION[id], items: bags[id] });
+    return out.length ? out : null;
+  }
+
+  function helpOf(prev, prefix, nav) {
     const p = String(prefix == null ? "" : prefix);
     if (/^\s*%%/.test(p)) return null;                     // a comment line stays quiet
     let d = typeOf(prev);
@@ -198,15 +315,24 @@
     if (!d || !KW[d.key]) {
       // no `place`: the heading already says "Choose a diagram type", and a
       // second line repeating it only ate a chip row (measured 2026-10-31)
-      return { type: "", place: "",
-               items: TYPES.map(([id, arg]) => ({ ins: arg ? id + " " + arg : id, label: id, badge: arg || "" })) };
+      const items = TYPES.map(([id, arg]) => ({ ins: arg ? id + " " + arg : id, label: id, badge: arg || "" }));
+      return { type: "", place: "", sections: [{ name: "", items }], items };
     }
     const depth = depthOf(d.key, prev);
-    const items = (KW[d.key] || [])
-      .filter(k => depth > 0 || INNER.indexOf(k) < 0)
-      .map(k => ({ ins: k, label: k, badge: "" }));
-    return { type: d.id, place: depth > 0 ? "Inside a block" : "Top-level statement", items };
+    let sections = d.key === "flowchart" ? navSections(prev, p, nav) : null;
+    if (sections === false) return null;                   // prose: the layer has nothing to say
+    if (!sections) sections = kwSections(d.key, depth);
+    const items = [];
+    for (const s of sections)
+      for (const it of s.items) if (!items.some(x => x.ins === it.ins)) items.push(it);
+    return { type: d.id, place: depth > 0 ? "Inside a block" : "Top-level statement", sections, items };
   }
+
+  /* Does this item attach to the word before it (`A` + `-->`), or does it need
+     a space (`A` + `direction LR`)? A tap at the caret uses this, so a chip
+     never fuses two words into one node. */
+  const ATTACH = /^[-=~<>&|:;,.)\]}]/;
+  function joins(ins) { return !ATTACH.test(String(ins == null ? "" : ins)); }
 
   /* Mermaid's parse failure as ONE copyable line. The error object differs
      between diagrams (jison errors carry `.str` and `.hash.loc`, throw-errors
@@ -241,5 +367,6 @@
       .trim();
   }
 
-  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, helpOf, errText };
+  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest,
+                      helpOf, joins, SECTION, NAVTOK, errText };
 })();

@@ -64,13 +64,22 @@
    a delete or an undo only ENDS one. An asynchronous offer carries a
    generation token, so a late answer never paints a stale list.
 
-   ADR-8 (decided 2026-10-31): a second, PASSIVE surface. Inside ground a
-   provider claims with `panel(ctx)`, the engine keeps `help` — the diagram,
-   the kind of place the caret stands in and the words legal there — and
-   republishes it on every caret move. The layer owns no key and inserts
-   nothing, so it cannot disturb typing or the ADR-7 gestures; it is painted
-   only in `auto` and only while no list is up (a list already says what can
-   be taken). A provider without `panel` is simply not asked. */
+   ADR-8 (decided 2026-10-31): a second surface. Inside ground a provider
+   claims with `panel(ctx)`, the engine keeps `help` — the diagram, the kind of
+   place the caret stands in and the words legal there — and republishes it on
+   every caret move. The layer owns no KEY, so it cannot disturb typing or the
+   ADR-7 gestures; it is painted only in `auto` and only while no list is up (a
+   list already says what can be taken). A provider without `panel` is simply
+   not asked.
+
+   ADR-9 (decided 2026-10-31, same day): the layer is a TREE and it is TAPPABLE.
+   The answer changes with the grammar level under the caret (diagram -> place
+   -> kind of statement -> terminal), and a chip can be clicked: the pane
+   swallows the mousedown so the editor keeps focus and the caret never moves,
+   `helpPick` re-reads the caret, and the provider decides the span
+   (`panelCommit`: complete the word being typed, or insert at the caret). No
+   key is gained — insertion through a chip is the mouse's version of the
+   list's `commit`, one model path. */
 (function () {
   "use strict";
 
@@ -177,6 +186,7 @@
                manual: st.manual, mode: use(), why: st.why,
                at: c ? { l: c.l, c: c.c, fence: c.fence ? c.fence.lang : null } : null,
                help: st.help ? { id: st.help.id, type: st.help.type, place: st.help.place,
+                                 sections: st.help.sections.map(s => ({ name: s.name, items: s.items.slice() })),
                                  items: st.help.items.slice(), at: st.help.at } : null };
     }
     function publish() {
@@ -300,24 +310,39 @@
       if (a.at.l !== b.at.l || a.at.c !== b.at.c) return false;
       if (a.items.length !== b.items.length) return false;
       for (let i = 0; i < a.items.length; i++) if (a.items[i].ins !== b.items[i].ins) return false;
+      if (a.sections.length !== b.sections.length) return false;   // level 3 changed: the tree was rearranged
+      for (let i = 0; i < a.sections.length; i++) {
+        const x = a.sections[i], y = b.sections[i];
+        if (x.name !== y.name || x.items.length !== y.items.length) return false;
+        for (let j = 0; j < x.items.length; j++) if (x.items[j].ins !== y.items[j].ins) return false;
+      }
       return true;
+    }
+    /* The provider whose panel describes this caret — the same walk a list does,
+       but asking `panel` instead of `match`: the layer covers whitespace and
+       prose, where no list may open. One answer, so the provider is asked once. */
+    function panelFor(ctx) {
+      for (const p of PROVIDERS) {
+        if (!on(p) || typeof p.panel !== "function") continue;
+        let h = null;
+        try { h = p.panel(ctx, host); } catch (_) { h = null; }
+        if (h && Array.isArray(h.items) && h.items.length) return { p, h };
+      }
+      return null;
     }
     function syncHelp() {
       let next = null;
       if (use() === "auto" && st.phase !== "open") { // a list already says what may be taken
         const ctx = context(null);
-        if (ctx) {
-          for (const p of PROVIDERS) {
-            if (!on(p) || typeof p.panel !== "function") continue;
-            let h = null;
-            try { h = p.panel(ctx, host); } catch (_) { h = null; }
-            if (h && Array.isArray(h.items) && h.items.length) {
-              next = { id: p.id, type: String(h.type || ""), place: String(h.place || ""),
-                       items: h.items.slice(0, PANEL_MAX),
-                       at: { l: ctx.l, c: ctx.c, fence: ctx.fence ? ctx.fence.lang : null } };
-              break;
-            }
-          }
+        const a = ctx && panelFor(ctx);
+        if (a) {
+          const h = a.h;
+          next = { id: a.p.id, type: String(h.type || ""), place: String(h.place || ""),
+                   sections: (h.sections || [{ name: "", items: h.items }])
+                     .map(s => ({ name: String(s.name || ""), items: s.items.slice(0, PANEL_MAX) }))
+                     .filter(s => s.items.length),
+                   items: h.items.slice(0, PANEL_MAX),
+                   at: { l: ctx.l, c: ctx.c, fence: ctx.fence ? ctx.fence.lang : null } };
         }
       }
       if (sameHelp(st.help, next)) return false;
@@ -384,6 +409,20 @@
       return true;
     }
 
+    /* ADR-9: a chip is tappable. The pane keeps the editor focused (the click
+       is swallowed on mousedown), so the caret is read fresh here and the
+       provider lands the text through the host — the same model path as a list
+       pick: one line, one undo step, the normal dirty flag. The chip carries
+       only what it would insert; the span is the provider's call, because only
+       it knows whether the caret is mid-word. */
+    function helpPick(it) {
+      if (!it || !st.help) return false;         // a stale chip from a repaint
+      const ctx = context(null);
+      const a = ctx && panelFor(ctx);
+      if (!a || typeof a.p.panelCommit !== "function") return false;
+      try { return a.p.panelCommit(it, ctx, host) !== false; } catch (_) { return false; }
+    }
+
     /* Layout moved (scroll, resize, a row rewrapped): repaint at the caret. */
     function reanchor() {
       if (st.phase === "open") publish();
@@ -391,7 +430,7 @@
       return st.phase === "open";
     }
 
-    return { sense, follow, key, pick, accept: () => pick(st.sel), close, reanchor,
+    return { sense, follow, key, pick, helpPick, accept: () => pick(st.sel), close, reanchor,
              state: snapshot, subscribe, host };
   }
 
