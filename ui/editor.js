@@ -1535,6 +1535,34 @@ const Ed = {
       if (!t4.helpPick({ ins: "direction LR", label: "direction LR" }) ||
           h4.lines()[2] !== "A direction LR") fail("help:pad");
       if (e17.helpPick({ ins: "end", label: "end" })) fail("help:tapoff");   // a chip with no layer does nothing
+      /* ADR-9 level 4: inside ONE clause. A clause whose value the lexer takes
+         as free text (gantt: `dateFormat\s[^#\n]*`) gets that value's own
+         tokens — the dayjs/d3 ones the vendored build formats with — so the
+         layer answers "how is a dateFormat written" instead of repeating the
+         clause names. A clause whose value is prose (title, section, a task's
+         text, a style string) makes the layer step aside, and the directive line
+         itself keeps its clause groups (its word IS the type). */
+      const ga = MH.helpOf(["gantt"], "dateFormat ", null);
+      if (!ga || ga.sections.length !== 1 || ga.sections[0].name !== "Date format") fail("help:gantt");
+      if (!ga.sections[0].note || !ga.sections[0].items.some(x => x.ins === "YYYY")) fail("help:gantt2");
+      const ga2 = MH.helpOf(["gantt"], "dateFormat YYY", null);
+      if (!ga2 || ga2.sections[0].name !== "Date format") fail("help:gantt3");
+      if (MH.helpOf(["gantt"], "title My", null)) fail("help:gantt4");          // prose value: quiet
+      if (MH.helpOf(["gantt"], "task Build", null)) fail("help:gantt5");
+      const ax = MH.helpOf(["gantt"], "axisFormat ", null);
+      if (!ax || ax.sections[0].items[0].ins !== "%Y-%m-%d") fail("help:axis");
+      const ex = MH.helpOf(["gantt"], "excludes ", null);
+      if (!ex || !ex.sections[0].items.some(x => x.ins === "weekend")) fail("help:excl");
+      if (!MH.helpOf(["gantt"], "gantt", null).sections.length) fail("help:gantt6");  // the directive line itself
+      const g7 = MH.helpOf(["sequenceDiagram"], "loop everyday", null);
+      if (g7) fail("help:gantt7");                                              // a block's condition is prose
+      const h5 = host(["```mermaid", "gantt", "dateFormat", "```"], 2, 10), t5 = HC.create(h5, { mode: "auto" });
+      t5.follow();
+      if (!t5.state().help || t5.state().help.sections[0].name !== "Date format") fail("help:gantt8");
+      if (!t5.helpPick({ ins: "YYYY", label: "YYYY" }) || h5.lines()[2] !== "dateFormat YYYY") fail("help:gantttap");
+      const h6 = host(["```mermaid", "gantt", "dateFormat YYY", "```"], 2, 14), t6 = HC.create(h6, { mode: "auto" });
+      t6.follow();
+      if (!t6.helpPick({ ins: "YYYY", label: "YYYY" }) || h6.lines()[2] !== "dateFormat YYYY") fail("help:ganttfill");
       // an answer that arrives after the caret moved must be dropped, not painted
       const pend = [];
       HC.register({ id: "self:async", priority: 1, match: () => true, trigger: () => true,

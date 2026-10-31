@@ -45,8 +45,8 @@
     class: ["class", "namespace", "callback", "link", "cssClass", "style", "direction"],
     state: ["state", "direction", "note", "classDef", "class"],
     er: ["PK", "FK", "UK"],
-    gantt: ["title", "dateFormat", "axisFormat", "tickInterval", "excludes", "todayMarker", "section", "task",
-      "done", "active", "crit", "milestone", "after", "until"],
+    gantt: ["title", "dateFormat", "axisFormat", "tickInterval", "excludes", "includes", "todayMarker",
+      "inclusiveEndDates", "topAxis", "section", "task", "done", "active", "crit", "milestone", "after", "until"],
     pie: ["title", "showData", "textPosition"],
     journey: ["title", "section", "task"],
     git: ["commit", "branch", "checkout", "merge", "cherry-pick", "tag", "id", "type"],
@@ -55,13 +55,28 @@
     quadrant: ["title", "x-axis", "y-axis", "quadrant-1", "quadrant-2", "quadrant-3", "quadrant-4", "point"],
     requirement: ["requirement", "functionalRequirement", "performanceRequirement", "interfaceRequirement",
       "physicalRequirement", "designConstraint", "element", "id", "text", "risk", "verifyMethod"],
-    c4: ["Person", "System", "System_Boundary", "Container", "Container_Boundary", "Component", "Rel",
-      "Rel_Back", "BiRel"],
+    c4: ["Person", "System", "System_Boundary", "Container", "Container_Boundary", "Component", "Rel", "Rel_Back", "BiRel"],
     xychart: ["title", "x-axis", "y-axis", "bar", "line"],
     block: ["columns", "block", "space"],
     packet: ["title", "end"],
     architecture: ["service", "group", "junction", "in", "out"],
     radar: ["axis", "curve", "max", "min", "showLegend"],
+  };
+  /* The VALUE of a clause that the lexer takes as free text, so no terminal
+     table can answer for it (gantt's own rule is `dateFormat\s[^#\n]*`). These
+     are the tokens the vendored build itself parses and ships — dayjs format
+     tokens, d3 time-format tokens, weekday names — i.e. what its defaults and
+     formatters are written in. A chip builds a value from them; a value they do
+     not name is still legal, so this is guidance, not a closed set. */
+  const ARGTOK = {
+    gantt: {
+      dateFormat: ["YYYY-MM-DD", "YYYY", "YY", "Q", "M", "MM", "MMM", "MMMM", "D", "DD", "Do", "DDD", "X", "x",
+        "H", "HH", "h", "hh", "a", "A", "m", "mm", "s", "ss", "S", "SS", "SSS", "Z", "ZZ"],
+      axisFormat: ["%Y-%m-%d", "%a", "%A", "%b", "%B", "%c", "%d", "%e", "%H", "%I", "%j", "%m",
+        "%M", "%L", "%p", "%S", "%U", "%w", "%W", "%x", "%X", "%y", "%Y", "%Z", "%%"],
+      excludes: ["weekend", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+      includes: ["weekend", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
+    },
   };
   const ALIAS = {                 // directive -> keyword table; `graph` is flowchart's legacy name
     graph: "flowchart", "stateDiagram-v2": "state", stateDiagram: "state",
@@ -307,10 +322,94 @@
     return out.length ? out : null;
   }
 
+  /* What a value token MEANS, as an i18n key (ui/i18n.js holds the sentence).
+     Prose, so it sits outside the verified vocabulary above; the chip shows it
+     as a tooltip, so a tap can be understood before it lands. */
+  const ARGDESC = {
+    "YYYY-MM-DD": "the default layout, e.g. 2014-08-01",
+    YYYY: "four-digit year", YY: "two-digit year",
+    Q: "quarter (sets the month to the quarter's first month)",
+    M: "month 1–12", MM: "month 1–12",
+    MMM: "month name in dayjs.locale()", MMMM: "month name in dayjs.locale()",
+    D: "day of month 1–31", DD: "day of month 1–31", Do: "day of month with an ordinal",
+    DDD: "day of year 1–365",
+    X: "unix timestamp in seconds", x: "unix timestamp in milliseconds",
+    H: "hour 0–23", HH: "hour 0–23", h: "hour 1–12", hh: "hour 1–12",
+    a: "am or pm", A: "am or pm",
+    m: "minute 0–59", mm: "minute 0–59", s: "second 0–59", ss: "second 0–59",
+    S: "tenths of a second", SS: "hundredths of a second", SSS: "milliseconds",
+    Z: "UTC offset ±HH:mm", ZZ: "UTC offset ±HHmm",
+    "%a": "abbreviated weekday name", "%A": "full weekday name",
+    "%b": "abbreviated month name", "%B": "full month name",
+    "%c": "date and time", "%d": "day of month, zero-padded [01,31]",
+    "%e": "day of month [ 1,31]", "%H": "hour, 24-hour [00,23]",
+    "%I": "hour, 12-hour [01,12]", "%j": "day of year [001,366]",
+    "%m": "month [01,12]", "%M": "minute [00,59]", "%L": "milliseconds [000,999]",
+    "%p": "am or pm", "%S": "second [00,61]",
+    "%U": "week of year, Sunday first [00,53]", "%w": "weekday [0 = Sunday, 6]",
+    "%W": "week of year, Monday first [00,53]", "%x": "date as %m/%d/%Y",
+    "%X": "time as %H:%M:%S", "%y": "year without century [00,99]",
+    "%Y": "year with century", "%Z": "timezone offset, e.g. -0700",
+    "%%": "a literal %",
+  };
+  /* A clause's value level: its caption, and one line of how to read it. Both
+     are i18n keys, like SECTION and `place`. */
+  const ARGSEC = { dateFormat: "Date format", axisFormat: "Axis format",
+                   excludes: "Excluded days", includes: "Included days" };
+  const ARGNOTE = {
+    dateFormat: "dayjs tokens, spaced as you like; default YYYY-MM-DD",
+    axisFormat: "d3 time-format tokens; default %Y-%m-%d",
+    excludes: "comma-separated days left out of the calendar",
+    includes: "comma-separated days added to the calendar",
+  };
+
+  /* The value section for a clause, or null when its value is not something we
+     can name here (the caller then falls back to the clause list, or silence). */
+  function argSections(key, word) {
+    const toks = ARGTOK[key] && ARGTOK[key][word];
+    if (!toks) return null;
+    return [{ name: ARGSEC[word] || word, note: ARGNOTE[word] || "",
+              items: toks.map(t => ({ ins: t, label: t, hint: ARGDESC[t] || "" })) }];
+  }
+
+  /* The clause the caret stands in: the line's first word (its head) and what
+     follows it. This is how the layer knows it moved from "which clause may
+     begin here" to "what does this one's value look like". */
+  function clauseOf(prefix) {
+    const m = /^[ \t]*([A-Za-z][A-Za-z0-9-]*)(.*)$/.exec(String(prefix == null ? "" : prefix));
+    return m ? { head: m[1], rest: m[2] } : null;
+  }
+
+  /* Level 3 when the caret is INSIDE one clause: after its head word, the
+     clause list would be a lie ("what clauses exist" instead of "how is this
+     one's value written"). Returns the value section when the value's tokens are
+     known (gantt's dateFormat/axisFormat/excludes/includes), `false` when the
+     value is prose — a title, a section name, a task's text, a style string,
+     where the user is writing words, not syntax — and null when the caret is
+     still ON the head (a word being typed, or a clause only known by its own
+     name), so the keyword groups stay. */
+  function clauseSections(key, prefix, type) {
+    const c = clauseOf(prefix);
+    if (!c) return null;
+    const low = c.head.toLowerCase();
+    // the line's first word is the diagram's OWN directive: it names the
+    // diagram, not a clause, so its value level does not exist here
+    if (type && low === String(type).toLowerCase()) return null;
+    const kws = KW[key] || [];
+    const exact = kws.filter(k => k.toLowerCase() === low)[0];
+    const heads = exact || kws.some(k => k.toLowerCase().startsWith(low));
+    if (!heads) return false;                                // an identifier line: prose
+    if (!exact) return null;                                 // the clause word is still being typed
+    const arg = argSections(key, exact);
+    if (arg) return arg;
+    return c.rest ? false : null;
+  }
+
   function helpOf(prev, prefix, nav) {
     const p = String(prefix == null ? "" : prefix);
     if (/^\s*%%/.test(p)) return null;                     // a comment line stays quiet
-    let d = typeOf(prev);
+    const fromBody = typeOf(prev);
+    let d = fromBody;
     if (!d || !KW[d.key]) d = typeOf([p.replace(/^\s+/, "")]);
     if (!d || !KW[d.key]) {
       // no `place`: the heading already says "Choose a diagram type", and a
@@ -321,6 +420,10 @@
     const depth = depthOf(d.key, prev);
     let sections = d.key === "flowchart" ? navSections(prev, p, nav) : null;
     if (sections === false) return null;                   // prose: the layer has nothing to say
+    // the caret's own line IS the diagram directive: it has no clause/value
+    // levels of its own (its word is the type), so the groups stay as they were
+    if (!sections && fromBody) sections = clauseSections(d.key, p, d.id);
+    if (sections === false) return null;                   // a clause's value is prose
     if (!sections) sections = kwSections(d.key, depth);
     const items = [];
     for (const s of sections)

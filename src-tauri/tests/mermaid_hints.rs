@@ -169,6 +169,11 @@ fn the_context_layer_speaks_the_same_vocabulary() {
     // levels are the compiled flow.jison tables (ui/hint-nav.json) — the parser
     // itself — and anything the tables cannot name falls back to the verified
     // keyword groups rather than to a guess.
+    // ADR-9 level 4: inside ONE clause the layer answers for that clause's
+    // VALUE. The tokens are the ones the vendored build itself formats with
+    // (dayjs `dateFormat`, d3 `axisFormat`, weekday names) — verified above by
+    // `vocabulary()`, because ARGTOK sits inside HINTS — and what they MEAN is
+    // prose (ui/i18n.js), shown as a tooltip.
     assert_has("ui/mermaid-syntax.js", &[
         "function helpOf(prev, prefix, nav) {",
         "const OPENERS = {",
@@ -176,6 +181,11 @@ fn the_context_layer_speaks_the_same_vocabulary() {
         "const SECTION = {",
         "function kwSections(key, depth) {",
         "if (depth === 0 && INNER.indexOf(k) >= 0) continue;",
+        "const ARGTOK = {",
+        "gantt: [\"title\", \"dateFormat\", \"axisFormat\", \"tickInterval\", \"excludes\", \"includes\", \"todayMarker\",",
+        "function argSections(key, word) {",
+        "function clauseSections(key, prefix, type) {",
+        "if (!sections && fromBody) sections = clauseSections(d.key, p, d.id);",
         "const NAVTOK = {",
         "function navSections(prev, prefix, nav) {",
         "if (!sections) sections = kwSections(d.key, depth);",
@@ -189,11 +199,18 @@ fn the_context_layer_speaks_the_same_vocabulary() {
         "if (n <= f.start || (!f.unclosed && n >= f.end)) return null;",
         "return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before, window.HintNav);",
         "panelCommit(it, ctx, host) {",
+        // a half-typed clause value is completed too, not only a word at the line start
+        r#"const replace = w && (onTypeLine ||
+        it.ins.toLowerCase().startsWith(w.word.toLowerCase()));"#,
         r#"const pad = M.joins(it.ins) && /[A-Za-z0-9_)\]}]$/.test(ctx.before) ? " " : "";"#,
     ]);
     assert_has("ui/i18n.js", &["\"Choose a diagram type\": \"选择图表类型\"",
         "\"Top-level statement\": \"顶层语句\"", "\"Inside a block\": \"块内（用 end 收尾）\"",
-        "\"Statements\": \"语句\"", "\"Arrow style\": \"连线箭头\"", "\"Links\": \"连线\""]);
+        "\"Statements\": \"语句\"", "\"Arrow style\": \"连线箭头\"", "\"Links\": \"连线\"",
+        // level 4: the clause's caption, its one-line note and the token meanings
+        "\"Date format\": \"日期格式\"", "\"Excluded days\": \"排除的日子\"",
+        "\"dayjs tokens, spaced as you like; default YYYY-MM-DD\": \"dayjs 记号，可按需加分隔符；默认 YYYY-MM-DD\"",
+        "\"four-digit year\": \"四位数年份\""]);
     // The tables are DATA, not code: the JSON carries its provenance (mermaid and
     // jison versions, the grammar's sha256) so a bump cannot silently diverge.
     let nav = read("ui/hint-nav.json");

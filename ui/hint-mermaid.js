@@ -57,7 +57,8 @@
     /* ADR-9: a chip is tappable. The click reaches here through the engine
        (helpPick), so mouse and keyboard share one insertion path — the model's
        `replace`, one line, one undo step. A word the item COMPLETES is replaced
-       (typing `su` then tapping `subgraph`); on the directive line the word is
+       (typing `su` then tapping `subgraph`, or a half-typed value like
+       `dateFormat YYY` then tapping `YYYY`); on the directive line the word is
        replaced whatever it says (tapping another diagram); anything else is
        inserted at the caret, with a space only when a word would otherwise
        fuse with the word before it (`A` + `-->` stays `A-->`). */
@@ -66,8 +67,12 @@
       const f = ctx.fence, w = M.wordAt(ctx.before);
       const body = f ? ctx.lines.slice(f.start, ctx.l) : [];
       const onTypeLine = !M.typeOf(body);
-      const replace = w && M.statementStart(ctx.before.slice(0, w.from)) &&
-        (onTypeLine || it.ins.toLowerCase().startsWith(w.word.toLowerCase()));
+      // a chip only exists where the layer says it is legal, so completing the
+      // word under the caret is safe anywhere on that line — not just at its
+      // start (a clause's half-typed value sits after `dateFormat `). A word the
+      // item does NOT complete is left alone and the item is inserted after it.
+      const replace = w && (onTypeLine ||
+        it.ins.toLowerCase().startsWith(w.word.toLowerCase()));
       if (replace) {
         host.replace({ l: ctx.l, from: ctx.c - w.word.length, to: ctx.c }, it.ins);
         return true;

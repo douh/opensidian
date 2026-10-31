@@ -186,7 +186,8 @@
                manual: st.manual, mode: use(), why: st.why,
                at: c ? { l: c.l, c: c.c, fence: c.fence ? c.fence.lang : null } : null,
                help: st.help ? { id: st.help.id, type: st.help.type, place: st.help.place,
-                                 sections: st.help.sections.map(s => ({ name: s.name, items: s.items.slice() })),
+                                 sections: st.help.sections.map(s => ({ name: s.name, note: s.note || "",
+                                                                        items: s.items.slice() })),
                                  items: st.help.items.slice(), at: st.help.at } : null };
     }
     function publish() {
@@ -313,7 +314,7 @@
       if (a.sections.length !== b.sections.length) return false;   // level 3 changed: the tree was rearranged
       for (let i = 0; i < a.sections.length; i++) {
         const x = a.sections[i], y = b.sections[i];
-        if (x.name !== y.name || x.items.length !== y.items.length) return false;
+        if (x.name !== y.name || x.note !== y.note || x.items.length !== y.items.length) return false;
         for (let j = 0; j < x.items.length; j++) if (x.items[j].ins !== y.items[j].ins) return false;
       }
       return true;
@@ -339,7 +340,8 @@
           const h = a.h;
           next = { id: a.p.id, type: String(h.type || ""), place: String(h.place || ""),
                    sections: (h.sections || [{ name: "", items: h.items }])
-                     .map(s => ({ name: String(s.name || ""), items: s.items.slice(0, PANEL_MAX) }))
+                     .map(s => ({ name: String(s.name || ""), note: String(s.note || ""),
+                                  items: s.items.slice(0, PANEL_MAX) }))
                      .filter(s => s.items.length),
                    items: h.items.slice(0, PANEL_MAX),
                    at: { l: ctx.l, c: ctx.c, fence: ctx.fence ? ctx.fence.lang : null } };

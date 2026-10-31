@@ -7151,6 +7151,14 @@ function paintHelp(g, st) {
         cap.textContent = i18n.t(sec.name);
         box.appendChild(cap);
       }
+      // a value level says how to read its tokens (e.g. gantt's dateFormat):
+      // one dim line under the caption, not another chip row
+      if (sec.note) {
+        const nt = document.createElement("div");
+        nt.className = "mh-note";
+        nt.textContent = i18n.t(sec.note);
+        box.appendChild(nt);
+      }
       const words = document.createElement("div");
       words.className = "mh-words";
       sec.items.forEach(it => {
@@ -7158,6 +7166,7 @@ function paintHelp(g, st) {
         const tap = typeof it.ins === "string" && it.ins.length > 0;
         w.className = tap ? "mh-w tap" : "mh-w";
         w.textContent = it.label;
+        if (it.hint) w.title = i18n.t(it.hint);  // what the token means, before it lands
         if (tap) {                             // a chip inserts; a passive token is only a word
           w.onmousedown = e => { e.preventDefault(); e.stopPropagation(); g._hints.helpPick(it); };
         }

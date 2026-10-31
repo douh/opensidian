@@ -745,6 +745,8 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
 .mh-place { color: var(--text-chrome-dim); margin-bottom: 6px; font-size: 11px }
 .mh-sec { color: var(--text-chrome-dim); margin: 6px 0 3px; font-size: 11px;
           letter-spacing: .02em }
+.mh-note { color: var(--text-chrome-dim); margin: -1px 0 4px; font-size: 10px;
+           line-height: 1.35 }
 .mh-words { display: flex; flex-wrap: wrap; gap: 4px 6px }
 .mh-w { padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
         white-space: nowrap; font-family: var(--font-monospace) }
