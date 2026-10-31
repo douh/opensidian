@@ -151,6 +151,63 @@
     return { word, from, items: items.slice(0, MAX) };
   }
 
+  /* ---------- ADR-8: the context layer ----------
+     A caret inside a fence gets a PASSIVE panel: which diagram this is, what
+     kind of place the caret stands in, and the words that are legal there. It
+     never inserts (that is the list's job, and the list is key-driven), so the
+     panel may appear where prose lives (a node label, an edge caption) without
+     rewriting anything.
+
+     The items are ALWAYS drawn from TYPES or KW — the same strings
+     tests/mermaid_hints.rs checks against the vendored bundle — so the panel
+     cannot teach a word Mermaid rejects. `place` is an i18n key (ui/i18n.js
+     holds the translation); nothing here knows about a language. */
+  const OPENERS = {                 // typeKey -> what opens a nested body, and what closes it
+    flowchart: { open: /^subgraph\b/, close: /^end\b/ },
+    sequence: { open: /^(?:loop|alt|opt|par|critical|break|rect|box)\b/, close: /^end\b/ },
+    class: { open: /\{\s*$/, close: /^\}\s*$/ },
+    state: { open: /\{\s*$/, close: /^\}\s*$/ },
+    er: { open: /\{\s*$/, close: /^\}\s*$/ },
+  };
+  /* `end` closes a block, `else`/`and` switch one, so they are offered only
+     INSIDE one — at the top level they are a syntax error. */
+  const INNER = ["end", "else", "and"];
+
+  /* Brace/unbalanced nesting of the block that encloses the caret, counted over
+     the body above it (the caret's own line cannot close or open it). */
+  function depthOf(key, prev) {
+    const b = OPENERS[key];
+    if (!b) return 0;
+    let d = 0;
+    for (const raw of prev) {
+      const t = raw.trim();
+      if (b.close.test(t)) d = Math.max(0, d - 1);
+      else if (b.open.test(t)) d++;
+    }
+    return d;
+  }
+
+  /* {type, place, items} for a caret ending `prefix`, with the body above it.
+     Empty of a directive => the whole type list (that IS the newcomer's first
+     question). `type` is the directive as typed (`graph` stays `graph`). */
+  function helpOf(prev, prefix) {
+    const p = String(prefix == null ? "" : prefix);
+    if (/^\s*%%/.test(p)) return null;                     // a comment line stays quiet
+    let d = typeOf(prev);
+    if (!d || !KW[d.key]) d = typeOf([p.replace(/^\s+/, "")]);
+    if (!d || !KW[d.key]) {
+      // no `place`: the heading already says "Choose a diagram type", and a
+      // second line repeating it only ate a chip row (measured 2026-10-31)
+      return { type: "", place: "",
+               items: TYPES.map(([id, arg]) => ({ ins: arg ? id + " " + arg : id, label: id, badge: arg || "" })) };
+    }
+    const depth = depthOf(d.key, prev);
+    const items = (KW[d.key] || [])
+      .filter(k => depth > 0 || INNER.indexOf(k) < 0)
+      .map(k => ({ ins: k, label: k, badge: "" }));
+    return { type: d.id, place: depth > 0 ? "Inside a block" : "Top-level statement", items };
+  }
+
   /* Mermaid's parse failure as ONE copyable line. The error object differs
      between diagrams (jison errors carry `.str` and `.hash.loc`, throw-errors
      carry `.message`), so every shape we have seen is read defensively; the
@@ -184,5 +241,5 @@
       .trim();
   }
 
-  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, errText };
+  window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, helpOf, errText };
 })();

@@ -356,6 +356,11 @@
     "Ask each time": "每次询问",
     "All selected": "全选",
     "Exit Restricted mode": "退出受限模式",
+    /* ADR-8: the labels the mermaid context layer builds at runtime. The words
+       themselves (subgraph, participant, ...) are syntax and never translated. */
+    "Choose a diagram type": "选择图表类型",
+    "Top-level statement": "顶层语句",
+    "Inside a block": "块内（用 end 收尾）",
   };
 
   /* Strings the app builds at runtime carry a number: "Version 0.9.0",

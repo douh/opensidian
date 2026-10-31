@@ -62,7 +62,15 @@
    only REFRESHES a list that still describes the caret — it follows the
    cursor inside its span and disappears when the cursor leaves it; a paste,
    a delete or an undo only ENDS one. An asynchronous offer carries a
-   generation token, so a late answer never paints a stale list. */
+   generation token, so a late answer never paints a stale list.
+
+   ADR-8 (decided 2026-10-31): a second, PASSIVE surface. Inside ground a
+   provider claims with `panel(ctx)`, the engine keeps `help` — the diagram,
+   the kind of place the caret stands in and the words legal there — and
+   republishes it on every caret move. The layer owns no key and inserts
+   nothing, so it cannot disturb typing or the ADR-7 gestures; it is painted
+   only in `auto` and only while no list is up (a list already says what can
+   be taken). A provider without `panel` is simply not asked. */
 (function () {
   "use strict";
 
@@ -77,6 +85,7 @@
     move: ["ArrowDown", "ArrowUp"],
   };
   const DEFAULTS = { mode: "auto", keys: KEYS, max: 8, providers: {} };
+  const PANEL_MAX = 32;                         // the layer is a glance with a scroll, not a menu
   let conf = null;                              // parsed once, mutated only by settings()
   const PROVIDERS = [];                         // asked in priority order, higher first
   let seq = 0;
@@ -155,7 +164,7 @@
     const on = p => (opts.providers && typeof opts.providers[p.id] === "boolean"
       ? opts.providers[p.id] : enabled(p.id));
     const st = { phase: "off", provider: null, ctx: null, items: [], sel: 0, range: null,
-                 gen: 0, manual: false, why: "new" };
+                 gen: 0, manual: false, why: "new", help: null };
     const subs = [];
 
     /* The state a presenter paints. `at` is the caret the offer describes —
@@ -166,7 +175,9 @@
                items: st.items.slice(), sel: st.sel,
                range: st.range ? { l: st.range.l, from: st.range.from, to: st.range.to } : null,
                manual: st.manual, mode: use(), why: st.why,
-               at: c ? { l: c.l, c: c.c, fence: c.fence ? c.fence.lang : null } : null };
+               at: c ? { l: c.l, c: c.c, fence: c.fence ? c.fence.lang : null } : null,
+               help: st.help ? { id: st.help.id, type: st.help.type, place: st.help.place,
+                                 items: st.help.items.slice(), at: st.help.at } : null };
     }
     function publish() {
       const s = snapshot();
@@ -229,12 +240,12 @@
     }
 
     function close(why) {
-      const was = st.phase === "open";
+      const was = st.phase === "open", had = !!st.help;
       st.gen++;                                  // any pending answer is stale from here on
       st.phase = "off"; st.provider = null; st.ctx = null;
-      st.items = []; st.sel = 0; st.range = null; st.manual = false;
+      st.items = []; st.sel = 0; st.range = null; st.manual = false; st.help = null;
       st.why = why || "close";
-      if (was) publish();
+      if (was || had) publish();
       return true;
     }
 
@@ -247,7 +258,7 @@
        just inserted (or null: a paste, a delete, an undo, our own insertion);
        `moved` says the selection was set. Nothing opens without a typed
        character — that is the whole input flow, stated once. */
-    function sense(input) {
+    function step(input) {
       input = input || {};
       const typed = typeof input.typed === "string" && input.typed.length ? input.typed.slice(-1) : null;
       const ctx = context(typed);
@@ -276,6 +287,54 @@
       offer(p, ctx, false);                      // the word grew: re-filter
       return true;
     }
+
+    /* ---------- ADR-8: the passive layer ----------
+       Recomputed on every caret move and owned by no key. A provider that
+       offers `panel` may describe the ground; the first one that answers wins,
+       like a list. The equality check keeps a keystroke inside the same place
+       from repainting an unchanged panel, while the caret is part of the key —
+       the panel is anchored where the caret is. */
+    function sameHelp(a, b) {
+      if (!a || !b) return !a && !b;
+      if (a.id !== b.id || a.type !== b.type || a.place !== b.place) return false;
+      if (a.at.l !== b.at.l || a.at.c !== b.at.c) return false;
+      if (a.items.length !== b.items.length) return false;
+      for (let i = 0; i < a.items.length; i++) if (a.items[i].ins !== b.items[i].ins) return false;
+      return true;
+    }
+    function syncHelp() {
+      let next = null;
+      if (use() === "auto" && st.phase !== "open") { // a list already says what may be taken
+        const ctx = context(null);
+        if (ctx) {
+          for (const p of PROVIDERS) {
+            if (!on(p) || typeof p.panel !== "function") continue;
+            let h = null;
+            try { h = p.panel(ctx, host); } catch (_) { h = null; }
+            if (h && Array.isArray(h.items) && h.items.length) {
+              next = { id: p.id, type: String(h.type || ""), place: String(h.place || ""),
+                       items: h.items.slice(0, PANEL_MAX),
+                       at: { l: ctx.l, c: ctx.c, fence: ctx.fence ? ctx.fence.lang : null } };
+              break;
+            }
+          }
+        }
+      }
+      if (sameHelp(st.help, next)) return false;
+      st.help = next;
+      publish();
+      return true;
+    }
+
+    /* One event in, both surfaces out: the list decides when it opens, the
+       layer simply follows the caret. `follow` is the call for a pane that
+       gained focus or was created without a transaction. */
+    function sense(input) {
+      const r = step(input);
+      syncHelp();
+      return r;
+    }
+    function follow() { syncHelp(); return !!st.help; }
 
     /* The keys the engine owns. Returning true means "the editor must not see
        this key" — the caller does the preventing, so the engine stays testable
@@ -326,9 +385,13 @@
     }
 
     /* Layout moved (scroll, resize, a row rewrapped): repaint at the caret. */
-    function reanchor() { if (st.phase === "open") publish(); return st.phase === "open"; }
+    function reanchor() {
+      if (st.phase === "open") publish();
+      syncHelp();                                // the panel is anchored to the caret too
+      return st.phase === "open";
+    }
 
-    return { sense, key, pick, accept: () => pick(st.sel), close, reanchor,
+    return { sense, follow, key, pick, accept: () => pick(st.sel), close, reanchor,
              state: snapshot, subscribe, host };
   }
 

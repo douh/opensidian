@@ -188,7 +188,51 @@ fn a_late_answer_never_paints_a_stale_list() {
     assert_has("ui/hint-core.js", &[
         "const gen = ++st.gen;",
         "if (gen !== st.gen) return false;",
-        "if (was) publish();",
+        // closing now also clears the ADR-8 layer, so a closed engine repaints
+        // when either surface had something to show
+        "if (was || had) publish();",
+    ]);
+}
+
+#[test]
+fn the_context_layer_is_passive_and_follows_the_caret() {
+    // ADR-8 (2026-10-31): inside mermaid ground a second surface says what the
+    // diagram is and which words are legal where the caret stands. It owns no
+    // key, inserts nothing and never opens a list: it is recomputed by the
+    // engine on every caret move (`syncHelp` from `sense`), published in the
+    // snapshot, painted by one function, and suppressed while a list is up
+    // (the list already says what may be taken). The intent still wins: only
+    // `auto` raises it, `manual`/`off` stay quiet.
+    assert_has("ui/hint-core.js", &[
+        "function syncHelp() {",
+        "if (use() === \"auto\" && st.phase !== \"open\") { // a list already says what may be taken",
+        "help: st.help ? { id: st.help.id, type: st.help.type, place: st.help.place,",
+        "function follow() { syncHelp(); return !!st.help; }",
+        "const r = step(input);",
+        "// the panel is anchored to the caret too",
+        "follow, key, pick",
+    ]);
+    // Nothing in the layer may write: no pick path for `help` at all.
+    assert_lacks("ui/hint-core.js", &["helpPick", "st.help.items[i]"]);
+    assert_has("ui/hint-mermaid.js", &["panel(ctx) {", "return M.helpOf("]);
+    assert_has("ui/main.js", &[
+        "function paintHelp(g, st) {",
+        "g.helpEl = q(\".mmdhelp\");",
+        "g._hints.subscribe(st => paintHelp(g, st));",
+        "[hinthelp:",
+        "head.textContent = h.type || i18n.t(\"Choose a diagram type\");",
+        "place.textContent = i18n.t(h.place);",
+        // a pointer-dead card cannot be scrolled, so its height follows the room
+        // the caret leaves (a fixed 240px cap cut the type chooser's last row)
+        "box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12)",
+    ]);
+    // passive by construction: no pointer target (the card floats over text the
+    // user may still be clicking into) and no vocabulary of its own to insert
+    assert_has("ui/style.css", &[".mmdhelp {", "pointer-events: none", ".mh-words {"]);
+    // and the layer is proven on every launch, not only here
+    assert_has("ui/editor.js", &[
+        "fail(\"help:types\")", "fail(\"help:vocab\")", "fail(\"help:block\")",
+        "fail(\"help:list\")", "fail(\"help:intent\")",
     ]);
 }
 

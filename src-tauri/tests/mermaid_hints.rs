@@ -86,7 +86,7 @@ fn the_module_is_a_classic_script_loaded_before_main() {
     assert!(vocab < prov, "the vocabulary must load BEFORE the provider that reads it");
     assert!(prov < main, "the providers must load BEFORE main.js (it registers the host)");
     assert_has("ui/mermaid-syntax.js",
-        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, errText }"]);
+        &["window.MmdHints = { TYPES, KW, ALIAS, wordChar, statementStart, wordAt, fenceOf, typeOf, suggest, helpOf, errText }"]);
 }
 
 #[test]
@@ -155,6 +155,31 @@ fn a_broken_diagram_explains_itself_in_both_views() {
     assert_has("ui/editor.js", &["mmdCache.set(src, { bad: window.MmdHints ? MmdHints.errText(e) : \"parse error\" });",
         "h.className = \"mmderr\"; h.textContent = c.bad;"]);
     assert_has("ui/style.css", &[":is(.preview, .lp) .mermaid-block .mmderr"]);
+}
+
+#[test]
+fn the_context_layer_speaks_the_same_vocabulary() {
+    // ADR-8: the passive layer must never invent syntax either. Its items are
+    // drawn from TYPES/KW (the two tables this file checks against the vendored
+    // bundle), its `place` values are i18n keys, and the provider only decides
+    // WHEN to ask — the layer owns no insertion path, so a wrong word could
+    // never be written into a note.
+    assert_has("ui/mermaid-syntax.js", &[
+        "function helpOf(prev, prefix) {",
+        "const OPENERS = {",
+        "const INNER = [\"end\", \"else\", \"and\"];",
+        // the chooser says nothing twice: its heading IS "Choose a diagram type"
+        "return { type: \"\", place: \"\",",
+        "place: depth > 0 ? \"Inside a block\" : \"Top-level statement\", items };",
+        ".filter(k => depth > 0 || INNER.indexOf(k) < 0)",
+    ]);
+    assert_has("ui/hint-mermaid.js", &[
+        "panel(ctx) {",
+        "if (n <= f.start || (!f.unclosed && n >= f.end)) return null;",
+        "return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before);",
+    ]);
+    assert_has("ui/i18n.js", &["\"Choose a diagram type\": \"选择图表类型\"",
+        "\"Top-level statement\": \"顶层语句\"", "\"Inside a block\": \"块内（用 end 收尾）\""]);
 }
 
 #[test]

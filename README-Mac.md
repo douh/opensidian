@@ -224,10 +224,10 @@ cargo test --locked
 
 | 层 | 文件 | 只负责 |
 |---|---|---|
-| L0 知识 | `ui/mermaid-syntax.js`、`ui/hint-nav.js` + `ui/hint-nav.json` | 词表 + 纯函数（围栏、语句起始、前缀过滤、错误措辞）；语法导航的机器表（见「Mermaid」一节的「语法导航」）；不认识光标 |
+| L0 知识 | `ui/mermaid-syntax.js`、`ui/hint-nav.js` + `ui/hint-nav.json` | 词表 + 纯函数（围栏、语句起始、前缀过滤、错误措辞、ADR-8 的上下文分类 `helpOf`）；语法导航的机器表（见「Mermaid」一节的「语法导航」）；不认识光标 |
 | L1 引擎 | `ui/hint-core.js` | 状态机、上下文、意图、键位、异步归属；**无 DOM、无 app 全局** |
-| L2 提供者 | `ui/hint-mermaid.js`、`ui/hint-wiki.js` | 为各自语法回答 `match`/`trigger`/`offer`/`commit`，只通过 host 接口说话 |
-| L3 宿主 + 呈现 | `ui/main.js` | `hintHost(g)`（读模型与仓库）与 `paintHints`（**唯一**写 `g.acEl` 的地方） |
+| L2 提供者 | `ui/hint-mermaid.js`、`ui/hint-wiki.js` | 为各自语法回答 `match`/`trigger`/`offer`/`commit`（mermaid 另有被动图层的 `panel`，ADR-8），只通过 host 接口说话 |
+| L3 宿主 + 呈现 | `ui/main.js` | `hintHost(g)`（读模型与仓库）、`paintHints`（**唯一**写 `g.acEl` 的地方）与 `paintHelp`（ADR-8 图层的唯一写点） |
 
 **上下文状态管理。** 每个 pane 一个引擎（`mkGroup` 里 `g._hints = HintCore.create(hintHost(g))`），列表状态跟着 pane 走。引擎把光标、本行前缀、围栏、本次键入收进一个 `ctx` 交给提供者；`state()` 给出可被 census/自检读取的快照（含 `at` 与 `fence`）。
 
@@ -256,13 +256,15 @@ cargo test --locked
 
 **插入**：两个提供者都走 `host.replace(range, text)` → `Ed.replace`（模型、行锚定、一次撤销、同脏标记、同保存路径）；`Ed.acInsert`/`Ed.acInsertText` 因此删除，全 app 只剩一条插入路径。
 
-**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题、Tab 开/双 Tab 取/Shift+Tab 不插入/无槽 Tab 归还），失败以 `[edt:hint:…]` 出现在窗口标题。`src-tauri/tests/hint_engine.rs`（9 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、ADR-7 的三手势与可改绑、异步令牌；`tests/mermaid_hints.rs`（9 条）继续钉住 mermaid 的词表与连线、以及"只有打字能开"的输入流。`tests/hint_nav.rs`（5 条）钉住 mermaid 语法表。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现。
+**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题、Tab 开/双 Tab 取/Shift+Tab 不插入/无槽 Tab 归还），失败以 `[edt:hint:…]` 出现在窗口标题。`src-tauri/tests/hint_engine.rs`（10 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、ADR-7 的三手势与可改绑、异步令牌，以及 ADR-8 的被动图层（无键、无插入路径、列表优先、`manual`/`off` 安静）；`tests/mermaid_hints.rs`（10 条）继续钉住 mermaid 的词表与连线、以及"只有打字能开"的输入流。`tests/hint_nav.rs`（5 条）钉住 mermaid 语法表。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现，`[hinthelp:<provider>:<type>:<place>:<n>]` 在图层显示时出现（`type` 为 `-` 表示还没写图表指令）。
 
 ## Mermaid：围栏里的语法提示
 
 围栏内写图时，两件事有提示：**能写什么**（补全）与**哪儿写错了**（解析错误）。知识源仍是 `ui/mermaid-syntax.js`（普通 `<script>`，在引擎与 `main.js` 之前加载），不新增 vendored 包——CM6 自带的 `@codemirror/autocomplete`/`lint` 虽已随 `ui/vendor/cm6` 存在，仍不使用，避免第二套并行路径。
 
 - **补全**：`ui/hint-mermaid.js` 作为提供者回答四问——`match`（光标在 mermaid 围栏体内、落在**词**上、且这个词从语句起始处开始；节点标签 `A[Start`、边文本 `|open|`、标题是散文，不弹）、`trigger`（本次键入的是词字符）、`offer`（`M.suggest` 取围栏体内光标上方的行；替换跨度是本行这个词的列区间）、`commit`（经 host 插入）。围栏判定用 `M.fenceOf` → `Ed.fenceAt`，与渲染器同一个函数，所以能补的行一定是渲染器会画的行。
+- **语法图层（ADR-8，已裁定 2026-10-31）**：补全只在"开始打一个词"时出现，新人进入一张空图时仍然不知道该写什么。因此引擎多了一个**被动**表面：光标只要落在 mermaid 围栏**体内**（两个 ``` 行除外），右侧就出现一块小卡，写着三件事——**这是哪个图**（`sequenceDiagram`…）、**光标站在哪一层**（`顶层语句` / `块内`，后者由 `subgraph`/`loop`/`class A {` 这类开启行与 `end`/`}` 的配对深度算出）、**此处可用的词**（直接取 `TYPES` 或 `KW`，所以依旧是 `mermaid_hints.rs` 对着 vendored bundle 查过的那批字符串）。围栏体还没有指令时，卡片列出的就是全部 26 种图表类型——这正是"用不全所有类型"的那一问。
+  这块卡**不拥有任何键、不插入任何东西**：它是地图，不是菜单（插入仍走 ADR-7 的列表）。所以它可以在散文处（节点标签、边文本）出现而不改坏一行字；只在 `auto` 意图下出现（`manual`/`off` 保持安静），列表打开时让位（列表已经说了能取什么）。空行/`%%` 注释行/两个 ``` 行都不画。引擎侧是 `syncHelp()`（`sense` 与 `reanchor` 之后调用，`follow()` 供新建或获焦的 pane），快照里是 `help:{id,type,place,items,at}`；`main.js` 只有 `paintHelp` 一处画它（`.mmdhelp`，z-index 低于 `.ac`，`pointer-events:none` 所以卡片不抢文字上的点击，右侧放不下时翻到左侧）。真机量出两处需要改的地方并已改：①没有指令时标题已经写了"选择图表类型"，`place` 再写一遍就是同一句话两行，白占一行芯片 → 选择器返回 `place:""`，`paintHelp` 空则不出第二行；②卡高曾写死 `240px`，而卡片不接指针事件（滚不动），26 个类型芯片的最后一行被裁掉 → 高度改为按光标下方的剩余空间算（`box.style.maxHeight = max(80, content.clientHeight - top - 12)`）。
 - **错误**：解析失败时阅读视图与 Live Preview **都**保留源码，并追加解析器自己的话（`MmdHints.errText` 把 jison 的 `Parse error on line N: … Expecting …` 压成一行，行号只取自 `hash.loc`，不臆造）。空盒绝不会出现。
 - **真实性**：`HINTS-BEGIN/HINTS-END` 之间的每个字符串都是"词表声明"，`src-tauri/tests/mermaid_hints.rs` 逐条在 `ui/vendor/mermaid/mermaid.min.js` 里查存在——提议 Mermaid 会拒绝的语法比不提更糟。因此 `zenuml`（11.17.2 的解析图里没有该 parser）与 ER 基数符号（压缩后的 lexer 由碎片拼出，无字面量可查）**故意不收**。
 - **语法导航**：光标停在 `A--` 后面该接什么，不是风格问题，是 mermaid 自己语法的事。两层各有各的答案：字符层由 lexer 决定（`o`/`x`/`>`/`-` 才是箭头，其他字符开始边文本，`"` 静默进 `string` 条件），token 层由 LALR 表决定（`A-->` 之时期望 13 个 token，含节点 `NODE_STRING`/`UNICODE_TEXT` 与开标签的 `PIPE`）。表不是手写的：`tools/vendor/flow-11.17.2.jison`（上游 `mermaid@11.17.2` 的 `flow.jison`，MIT，sha256 `b95d5a12…e384`）在**构建期**被 jison 0.4.18 编译一次，由 `tools/gen-hint-nav.js` 写成 `ui/hint-nav.json`（291 状态 / 4142 格 / 190 产生式 / 84 终结符 / 122 条词法规则 / 21 个条件，约 68 KB）。应用里**不装 jison、不跑 jison、不做 eval**：`ui/hint-nav.js` 只解释这份数据（`load`/`tokenize`/`drive`/`at`/`chars`），无 DOM、无 app 全局，`prefix` 必须从围栏体起算（`graph` 打开 `dir`、`--` 打开 `edgeText`，且 mermaid 的 `firstGraph()` 只认第一个 `graph`）。于是提示内容由**光标位置**决定，字母只改过滤词。重建：`npm i --prefix /tmp/hint-nav-tool jison@0.4.18 && NODE_PATH=/tmp/hint-nav-tool/node_modules node tools/gen-hint-nav.js`（装在仓外，避免 node_modules 弄脏工作树；`--check` 只比对不写；数据是单行紧凑 JSON，改一个字节就是一次可评审的 diff）。验收：`node tools/selftest-hint-nav.js`（45 条断言，零依赖，`A--` 字符类、`A-->` 期望、`A-->B` 收尾、词法错误不抛不转圈），Rust 侧 `src-tauri/tests/hint_nav.rs` 5 条（重算语法 sha256、表规模、运行时纯净、脚本层序、生成器与自检仍在）。移植时还与 jison 逐 token 对拍过 133 个输入（53 条语料 + 一张真实图的每个前缀），token 名与词法状态全等；已知上游死 token（`SEP`/`QUOTE`，语法里没有对应产生式）如实写进 `meta.deadTokens`，运行时按 jison 的"无 token"路径跳过。
@@ -270,7 +272,9 @@ cargo test --locked
 
 真机验证（macOS 探针，非自动化测试，输入法切 ABC 后按键才不被候选栏截走）：围栏内接在 `sub` 后打 `b` 弹出唯一候选 `subgraph`，Enter 取用后落盘且列表关闭；一次 `keystroke` 连发 `su`（并批）同样弹出；空格落下、列表当场关闭（此时 Enter 才是换行）；Esc 关闭；粘贴 `xy`、在 `A[Open] --> B` 行中段打 ` e` 都**不**弹；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`；标题为 `[edt:ok]`、`[hintmode:auto]`。
 
-合并姿态：上游若自带补全，**取上游**的弹窗与词表——我们的引擎/提供者是平台无关的 L2 上，冲突面只有 `index.html` 的脚本顺序、`onUpdate/onKey` 的两个缝和 `main.js` 的宿主/呈现函数；`errText` 那行错误说明与 `.mmderr` 样式仍以小补丁加回。上游不做则整块原样保留（`hint_engine.rs` 的 8 条 + `mermaid_hints.rs` 的 9 条保证它不会被某次重构顺手删掉）。
+ADR-8 图层的真机验证（同一套探针，2026-10-31，窗口摆回屏幕内、`ae=1` 后按行移动光标读标题）：` ```mermaid ` 行与围栏后的行都没有 `[hinthelp:]`；围栏体里当指令只打了 `fl` 时标题是 `[hinthelp:mermaid:-:-:26]`（26 种类型，截图确认 26 个芯片一次全可见、标题只出现一次）；`flowchart LR` 行是 `[hinthelp:mermaid:flowchart:Top-level_statement:11]`（顶层不含 `end`）；`subgraph S` 之下是 `[hinthelp:mermaid:flowchart:Inside_a_block:12]`（含 `end`）。走到围栏后面的行时 token 消失，列表（`[hint:]`）与图层同时存在的情形从未出现。
+
+合并姿态：上游若自带补全，**取上游**的弹窗与词表——我们的引擎/提供者是平台无关的 L2 上，冲突面只有 `index.html` 的脚本顺序、`onUpdate/onKey` 的两个缝和 `main.js` 的宿主/呈现函数；`errText` 那行错误说明与 `.mmderr` 样式仍以小补丁加回。上游不做则整块原样保留（`hint_engine.rs` 的 10 条 + `mermaid_hints.rs` 的 10 条保证它不会被某次重构顺手删掉）。
 
 ## 许可
 

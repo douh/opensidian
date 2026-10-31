@@ -2427,6 +2427,7 @@ function mkGroup() {
     '<div class="content">' +
       '<canvas class="graph" hidden></canvas>' +
       '<div class="ac" hidden></div>' +
+      '<div class="mmdhelp" hidden></div>' +
       '<div class="status status-bar" hidden><span class="st-bl"></span><span class="st-wc"></span><span class="st-cc"></span></div>' +
     '</div>';
   g.pane = pane;
@@ -2435,11 +2436,13 @@ function mkGroup() {
   g.navback = q(".navback"); g.navfwd = q(".navfwd");
   g.graph = q(".graph");
   g.acEl = q(".ac"); g.status = q(".status");
+  g.helpEl = q(".mmdhelp");                    // ADR-8: the passive mermaid layer
   // One hint ENGINE per pane (ui/hint-core.js): the popup's state lives with
   // the pane it belongs to, and this file only paints it (paintHints).
   if (window.HintCore) {
     g._hints = HintCore.create(hintHost(g));
     g._hints.subscribe(st => paintHints(g, st));
+    g._hints.subscribe(st => paintHelp(g, st));
   }
   g.stBl = q(".st-bl"); g.stWc = q(".st-wc"); g.stCc = q(".st-cc");
   pane.addEventListener("mousedown", () => focusGroup(g), true);  // R6.3: click focuses
@@ -7110,6 +7113,51 @@ function paintHints(g, st) {
   if (open || was) updateTitle();            // the [hint:] census token follows the list
 }
 
+/* ADR-8: paint the PASSIVE layer. A glance, not a menu — no row is clickable
+   and no key belongs to it (a list is the insert path, ADR-7). It sits to the
+   right of the caret and flips to the left when the pane has no room; it is
+   gone whenever the engine says there is no ground (outside a fence, a ``` line,
+   a list that is up) — the engine decides all of that, never this function. */
+function paintHelp(g, st) {
+  const box = g && g.helpEl;
+  if (!box) return;
+  const h = st && st.help;
+  if (h) {
+    box.textContent = "";
+    const head = document.createElement("div");
+    head.className = "mh-type";
+    head.textContent = h.type || i18n.t("Choose a diagram type");
+    box.appendChild(head);
+    const place = document.createElement("div");
+    place.className = "mh-place";
+    if (h.place) {                             // "" = the heading already said it
+      place.textContent = i18n.t(h.place);
+      box.appendChild(place);
+    }
+    const words = document.createElement("div");
+    words.className = "mh-words";
+    h.items.forEach(it => {
+      const w = document.createElement("span");
+      w.className = "mh-w";
+      w.textContent = it.label;
+      words.appendChild(w);
+    });
+    box.appendChild(words);
+    const [x, y] = Ed.caretXY(g);
+    const w = box.offsetWidth || 240, wide = g.content.clientWidth;
+    box.style.left = (x + 24 + w > wide ? Math.max(0, x - w - 12) : x + 24) + "px";
+    const top = Math.max(0, Math.min(y + 6, g.content.clientHeight - 40));
+    box.style.top = top + "px";
+    // the card takes no pointer events (it floats over live text), so it must
+    // fit on its own: size it to the room below the caret instead of a fixed
+    // cap — the type chooser is 26 chips and a 240px cap cut its last row.
+    box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12) + "px";
+  }
+  const was = !box.hidden;
+  box.hidden = !h;
+  if (h || was) updateTitle();               // [hinthelp:] follows the layer
+}
+
 const hintsOf = g => (g && g._hints ? g._hints : null);
 /* The one "stop suggesting" verb the rest of the app calls: a tab switch, a
    mode switch, an intent change. Same reach as the old hideAc — every pane. */
@@ -7129,6 +7177,11 @@ function hintTok() {
   if (st.phase === "open" && st.items.length)
     s += " [hint:" + st.phase + ":" + st.id + ":" + st.items.length + ":" +
          String(st.items[st.sel].ins).replace(/[[\]|:\s]/g, "_") + "]";
+  // ADR-8: a probe reads what the layer SAYS (type, place, how many words),
+  // not whether a rectangle covers some pixels.
+  if (st.help)
+    s += " [hinthelp:" + st.help.id + ":" + String(st.help.type || "-").replace(/[^A-Za-z0-9-]/g, "_") +
+         ":" + String(st.help.place || "-").replace(/\s+/g, "_") + ":" + st.help.items.length + "]";
   return s;
 }
 

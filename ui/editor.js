@@ -1438,6 +1438,40 @@ const Ed = {
       if (e10.host.did.length !== 0) fail("hint:shiftdirty");
       const e11 = HC.create(host(["```mermaid", "flowchart TD", "   ", "```"], 2, 1), { mode: "auto" });
       if (e11.key({ key: "Tab" })) fail("hint:ownindent");
+      /* ADR-8: the passive layer follows the caret inside a fence and says the
+         diagram, the place and the words legal there — WITHOUT owning a key.
+         A fence with no directive is exactly where a newcomer needs the type
+         list; a block body offers `end`, a top-level line does not; a list that
+         is up suppresses the layer (it already says what can be taken); the
+         ``` lines and manual/off intents stay quiet. */
+      const e12 = HC.create(host(["```mermaid", "", "```"], 1, 0), { mode: "auto" });
+      e12.follow();
+      // no `place` on the chooser: its heading already says "Choose a diagram
+      // type", and a repeated second line cost a chip row (measured 2026-10-31)
+      if (!e12.state().help || e12.state().help.place !== "" ||
+          e12.state().help.items.length !== MH.TYPES.length) fail("help:types");
+      const e13 = HC.create(host(["```mermaid", "sequenceDiagram", "", "```"], 2, 0), { mode: "auto" });
+      e13.follow();
+      if (!e13.state().help || e13.state().help.type !== "sequenceDiagram" ||
+          !e13.state().help.items.some(it => it.ins === "participant")) fail("help:vocab");
+      const e14 = HC.create(host(["```mermaid", "flowchart TD", "subgraph one", "", "```"], 3, 0), { mode: "auto" });
+      e14.follow();
+      if (!e14.state().help || e14.state().help.place !== "Inside a block" ||
+          !e14.state().help.items.some(it => it.ins === "end")) fail("help:block");
+      const e15 = HC.create(host(["```mermaid", "flowchart TD", "", "```"], 2, 0), { mode: "auto" });
+      e15.follow();
+      if (!e15.state().help || e15.state().help.items.some(it => it.ins === "end")) fail("help:top");
+      const e16 = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "auto" });
+      e16.sense({ typed: "u", moved: true });
+      if (!e16.state().items.length || e16.state().help) fail("help:list");
+      e16.close("test"); e16.follow();
+      if (!e16.state().help) fail("help:reopen");
+      const e17 = HC.create(host(["```mermaid", "flowchart TD", "", "```"], 2, 0), { mode: "manual" });
+      e17.follow();
+      if (e17.state().help) fail("help:intent");
+      const e18 = HC.create(host(["```mermaid", "flowchart TD", "", "```"], 0, 0), { mode: "auto" });
+      e18.follow();
+      if (e18.state().help) fail("help:outside");        // the ``` line stays quiet
       // an answer that arrives after the caret moved must be dropped, not painted
       const pend = [];
       HC.register({ id: "self:async", priority: 1, match: () => true, trigger: () => true,

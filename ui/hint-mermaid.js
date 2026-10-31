@@ -40,6 +40,17 @@
       return M.statementStart(ctx.before.slice(0, w.from));
     },
     trigger(typed) { return M.wordChar(typed); },
+    /* ADR-8: the passive syntax layer. It answers for the whole fence body
+       rather than for the word under the caret, and it is available wherever
+       that caret is INSIDE the body — the ``` lines stay quiet, because a
+       directive inserted on a fence line would edit the fence itself. */
+    panel(ctx) {
+      const f = ctx.fence;
+      if (!f || f.lang !== "mermaid") return null;
+      const n = ctx.l + 1;                  // M.fenceOf counts lines from 1
+      if (n <= f.start || (!f.unclosed && n >= f.end)) return null;
+      return M.helpOf(ctx.lines.slice(f.start, ctx.l), ctx.before);
+    },
     offer(ctx) {
       const f = ctx.fence, w = M.wordAt(ctx.before);
       if (!f || !w) return null;
