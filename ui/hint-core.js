@@ -28,14 +28,18 @@
      rank(query, word)          -1 = no match, lower = better
      replace(range, text)       { l, from, to } on ONE line -> the model
 
-   PROVIDER (one per syntax; hint-mermaid.js and hint-wiki.js do it today):
+   PROVIDER (one per syntax; hint-mermaid.js, hint-wiki.js and hint-markdown.js
+   do it today):
      id, label, priority        priority: higher is asked first
      match(ctx)                 "does this caret belong to me?"
      trigger(typed, ctx)        "may THIS keystroke open my list?"
      offer(ctx, intent, host)   { items, range } | thenable | null
      commit(item, ctx, host)    ctx.range is the span that was offered
-   items are { ins, label, badge }: ins is what a pick inserts, label and
-   badge are what the popup shows.
+     items are { ins, label, badge }: ins is what a pick inserts, label and
+     badge are what the popup shows.
+   A provider may also be PANEL-ONLY (ADR-10): no match/offer/commit, just
+   panel(ctx) and panelCommit — it describes a place and lands a chip, and no
+   keystroke can open anything through it.
 
    INTENT (the user's setting, localStorage "os.hints"):
      mode   auto    a typed character may open a list (default)
@@ -93,8 +97,16 @@
     dismiss: ["Escape", "Shift+Tab"],
     move: ["ArrowDown", "ArrowUp"],
   };
-  const DEFAULTS = { mode: "auto", keys: KEYS, max: 8, providers: {} };
-  const PANEL_MAX = 32;                         // the layer is a glance with a scroll, not a menu
+  const DEFAULTS = { mode: "auto", keys: KEYS, max: 8, providers: {}, depths: {} };
+  /* ADR-11: how much of a syntax element the reader still needs. One row of the
+     printed table is one element; the level decides what the card shows of it —
+     the whole lesson, the syntax alone, its example, its keyword, or nothing.
+     Order is least-to-most hidden, which is what a cycle walks. */
+  const LEVELS = ["full", "syntax", "example", "keyword", "off"];
+  /* A glance with a scroll, not a menu. 48 leaves room for ADR-10's blank-line
+     cheat sheet (35 chips = 24 meanings); a cap below it would silently drop
+     the meanings at the end of the card, which is a promise broken. */
+  const PANEL_MAX = 48;
   let conf = null;                              // parsed once, mutated only by settings()
   const PROVIDERS = [];                         // asked in priority order, higher first
   let seq = 0;
@@ -121,7 +133,8 @@
   /* `clean` is the schema: anything else on disk (an old key, a bad mode, a
      string where a boolean belongs) is dropped rather than half-honoured. */
   function clean(o) {
-    const out = { mode: DEFAULTS.mode, keys: keys(o && o.keys), max: DEFAULTS.max, providers: {} };
+    const out = { mode: DEFAULTS.mode, keys: keys(o && o.keys), max: DEFAULTS.max,
+                  providers: {}, depths: {} };
     if (!o || typeof o !== "object") return out;
     if (MODES.indexOf(o.mode) >= 0) out.mode = o.mode;
     // v0.1 kept the accept keys at the top level; honour that file once
@@ -130,6 +143,11 @@
     if (o.providers && typeof o.providers === "object")
       for (const k of Object.keys(o.providers))
         if (typeof o.providers[k] === "boolean") out.providers[k] = o.providers[k];
+    // a depth belongs to one row of one provider ("markdown/# "); a level the
+    // engine does not know is dropped, not half-honoured like the rest
+    if (o.depths && typeof o.depths === "object")
+      for (const k of Object.keys(o.depths))
+        if (typeof k === "string" && LEVELS.indexOf(o.depths[k]) >= 0) out.depths[k] = o.depths[k];
     return out;
   }
   function settings(patch) {
@@ -142,18 +160,81 @@
     }
     if (patch) {
       conf = clean(Object.assign({}, conf, patch,
-        { providers: Object.assign({}, conf.providers, (patch && patch.providers) || {}) }));
-      try { localStorage.setItem(KEY, JSON.stringify(conf)); } catch (_) { /* a session without storage still runs */ }
+        { providers: Object.assign({}, conf.providers, (patch && patch.providers) || {}),
+          depths: Object.assign({}, conf.depths, (patch && patch.depths) || {}) }));
+      try { localStorage.setItem(KEY, JSON.stringify(conf)) } catch (_) { /* a session without storage still runs */ }
     }
     return clean(conf);                         // a copy: callers read, never mutate
   }
   function mode() { return settings().mode; }
   function enabled(id) { return settings().providers[id] !== false; }   // on unless turned off
 
+  /* ---------- ADR-11: a lesson with a depth ----------
+     The card is a tree, and a tree is not worth much if it cannot be pruned:
+     someone who has written `##` ten thousand times should be able to stop
+     being told what `##` means. A ROW of the printed table (one `first` chip
+     plus the chips that share its meaning) is one syntax element; its depth
+     says how much of it the card still shows:
+
+       full     chip + example + explanation    (someone learning the form)
+       syntax   chip only, still tappable       (knows it, wants the syntax)
+       example  the example alone               (writes it from the sample)
+       keyword  the keyword alone               (needs only the reminder)
+       off      nothing                         (has it by hand)
+
+     The level is stored per provider and per row (`os.hints.depths`,
+     "markdown/# ") so pruning survives the session and the note. A provider
+     that prints no rows (a flat chip list, a chooser) keeps its items whole:
+     there is no element to grade there, and inventing one would be a promise
+     the card cannot keep. */
+  function rowKey(it) { return String(it.row != null ? it.row : (it.ins || it.label || "")); }
+  function shapeHelp(pid, h, depths) {
+    depths = depths || {};
+    const levelOf = key => {
+      const v = depths[pid + "/" + key];
+      return LEVELS.indexOf(v) >= 0 ? v : "full";
+    };
+    const sections = (h.sections || [{ name: "", items: h.items || [] }]).map(sec => {
+      const out = [];
+      let row = null;                            // chips that share the row's first
+      const flush = () => {
+        if (!row) return;
+        const first = row[0], key = rowKey(first), level = levelOf(key);
+        if (level === "off") { row = null; return; }
+        if (level === "syntax")
+          out.push(Object.assign({}, first, { hint: "", ex: "", first: 1, level, key }),
+            ...row.slice(1).map(it => ({ ins: it.ins, label: it.label, first: 0 })));
+        else if (level === "example" || level === "keyword")
+          out.push({ ins: "", label: level === "example" ? (first.ex || first.label) : first.label,
+                     hint: "", ex: "", first: 1, level, key });
+        else
+          out.push(Object.assign({}, first, { level, key }), ...row.slice(1));
+        row = null;
+      };
+      for (const it of sec.items || []) {
+        if (it.first) { flush(); row = [it]; }
+        else if (row) row.push(it);
+        else out.push(it);                        // a bare chip: no row, so no depth
+      }
+      flush();
+      return { name: String(sec.name || ""), note: String(sec.note || ""), items: out };
+    }).filter(sec => sec.items.length);
+    const items = [];
+    for (const sec of sections)
+      for (const it of sec.items)
+        if (!it.ins || !items.some(x => x.ins === it.ins)) items.push(it);
+    return { type: String(h.type || ""), place: String(h.place || ""), sections, items };
+  }
+
   /* ---------- provider registry ---------- */
   function register(p) {
     if (!p || typeof p.id !== "string" || !p.id) return false;
-    if (typeof p.match !== "function" || typeof p.offer !== "function" || typeof p.commit !== "function") return false;
+    /* ADR-10: a provider is a LIST (match/offer/commit), a PANEL (panel), or
+       both. A pane that only describes a place — the Markdown guide — must not
+       have to fake a list it never opens to get registered. */
+    const lists = typeof p.match === "function" && typeof p.offer === "function" &&
+                  typeof p.commit === "function";
+    if (!lists && typeof p.panel !== "function") return false;
     unregister(p.id);                           // re-registering replaces (self test, hot reload)
     p.priority = typeof p.priority === "number" ? p.priority : 0;
     p._seq = ++seq;
@@ -216,7 +297,7 @@
 
     function owner(ctx) {
       for (const p of PROVIDERS) {
-        if (!on(p)) continue;
+        if (!on(p) || typeof p.match !== "function") continue;   // panel-only providers open no list
         let m = false;
         try { m = !!p.match(ctx); } catch (_) { m = false; }
         if (m) return p;
@@ -305,17 +386,25 @@
        like a list. The equality check keeps a keystroke inside the same place
        from repainting an unchanged panel, while the caret is part of the key —
        the panel is anchored where the caret is. */
+    /* An item is the same when it would print and land the same: the chip, its
+       word, and (ADR-11) the depth its row is set to. The example/keyword
+       levels carry an empty `ins`, so the label and the level are part of the
+       identity — otherwise pruning one row would not repaint the card. */
+    function sameItem(x, y) {
+      return x.ins === y.ins && String(x.label || "") === String(y.label || "") &&
+             String(x.level || "full") === String(y.level || "full");
+    }
     function sameHelp(a, b) {
       if (!a || !b) return !a && !b;
       if (a.id !== b.id || a.type !== b.type || a.place !== b.place) return false;
       if (a.at.l !== b.at.l || a.at.c !== b.at.c) return false;
       if (a.items.length !== b.items.length) return false;
-      for (let i = 0; i < a.items.length; i++) if (a.items[i].ins !== b.items[i].ins) return false;
+      for (let i = 0; i < a.items.length; i++) if (!sameItem(a.items[i], b.items[i])) return false;
       if (a.sections.length !== b.sections.length) return false;   // level 3 changed: the tree was rearranged
       for (let i = 0; i < a.sections.length; i++) {
         const x = a.sections[i], y = b.sections[i];
         if (x.name !== y.name || x.note !== y.note || x.items.length !== y.items.length) return false;
-        for (let j = 0; j < x.items.length; j++) if (x.items[j].ins !== y.items[j].ins) return false;
+        for (let j = 0; j < x.items.length; j++) if (!sameItem(x.items[j], y.items[j])) return false;
       }
       return true;
     }
@@ -331,23 +420,22 @@
       }
       return null;
     }
-    function syncHelp() {
+    function syncHelp(force) {
       let next = null;
       if (use() === "auto" && st.phase !== "open") { // a list already says what may be taken
         const ctx = context(null);
         const a = ctx && panelFor(ctx);
         if (a) {
-          const h = a.h;
-          next = { id: a.p.id, type: String(h.type || ""), place: String(h.place || ""),
-                   sections: (h.sections || [{ name: "", items: h.items }])
-                     .map(s => ({ name: String(s.name || ""), note: String(s.note || ""),
-                                  items: s.items.slice(0, PANEL_MAX) }))
+          const h = shapeHelp(a.p.id, a.h, settings().depths);   // ADR-11: prune the tree
+          next = { id: a.p.id, type: h.type, place: h.place,
+                   sections: h.sections
+                     .map(s => ({ name: s.name, note: s.note, items: s.items.slice(0, PANEL_MAX) }))
                      .filter(s => s.items.length),
                    items: h.items.slice(0, PANEL_MAX),
                    at: { l: ctx.l, c: ctx.c, fence: ctx.fence ? ctx.fence.lang : null } };
         }
       }
-      if (sameHelp(st.help, next)) return false;
+      if (!force && sameHelp(st.help, next)) return false;
       st.help = next;
       publish();
       return true;
@@ -432,13 +520,48 @@
       return st.phase === "open";
     }
 
+    /* ADR-11: the reader says how deep a row's lesson goes. The card asks,
+       because the card is where the element appears; the choice is saved with
+       the other intent, so the same row of the next card is quieter. A row
+       taken to `off` is no longer printed, so bringing it back is the command
+       ui/main.js exposes ("hints:reset-depth") — a click cannot land on a row
+       that is not there, and pretending otherwise would be a hidden control. */
+    function setDepth(key, level) {
+      if (!st.help || typeof key !== "string" || !key || LEVELS.indexOf(level) < 0) return false;
+      const depths = Object.assign({}, settings().depths);
+      depths[st.help.id + "/" + key] = level;
+      settings({ depths });
+      syncHelp();
+      return true;
+    }
+    /* A forced repaint (the card's own control changed what it shows). */
+    function refresh() { syncHelp(true); return !!st.help; }
+
     return { sense, follow, key, pick, helpPick, accept: () => pick(st.sel), close, reanchor,
-             state: snapshot, subscribe, host };
+             setDepth, refresh, state: snapshot, subscribe, host };
+  }
+
+  /* ADR-11: forget saved depths — the card goes back to being a lesson for a
+     beginner. No prefix = every provider; a prefix ("self:") clears only that
+     provider's rows, which is how the startup self test puts its own keys back
+     without touching a real reader's pruning. Panes repaint themselves
+     (ui/main.js calls refresh on each). */
+  function resetDepths(prefix) {
+    const s = settings();
+    const p = typeof prefix === "string" && prefix ? prefix : null;
+    const depths = {};
+    for (const k of Object.keys(s.depths)) {
+      if (!p || k.indexOf(p) === 0) continue;   // no prefix: all go; a prefix: its own rows go
+      depths[k] = s.depths[k];
+    }
+    conf = clean(Object.assign({}, s, { depths }));
+    try { localStorage.setItem(KEY, JSON.stringify(conf)); } catch (_) { /* no storage, no persistence */ }
+    return true;
   }
 
   window.HintCore = {
-    SETTINGS_KEY: KEY, MODES, KEYS, DEFAULTS,
+    SETTINGS_KEY: KEY, MODES, KEYS, LEVELS, DEFAULTS,
     register, unregister, providers: () => PROVIDERS.slice(),
-    create, settings, mode, enabled,
+    create, settings, mode, enabled, resetDepths,
   };
 })();

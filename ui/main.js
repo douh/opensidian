@@ -3165,7 +3165,13 @@ function wsSidesIn(doc) {
    reporting `#main` when the real culprit is a button in the tab strip costs
    an iteration every time. */
 const OVF_SCROLL = "#tree,#sresults,#bmlist,.rlist,.lp,.preview,.editor,.ac," +
-                   "#mlist,#p-dirs,#p-recent,#sbody,#snav,#spage,#hklist";
+                   "#mlist,#p-dirs,#p-recent,#sbody,#snav,#spage,#hklist,"
+                   // the hint card (ADR-10): a sheet with every form of Markdown is
+                   // taller than a 700px window, so it scrolls by design inside
+                   // the room its maxHeight leaves. Its box is clamped to the
+                   // viewport in paintHelp, so nothing unsigned hangs off the
+                   // edge — the rows past b688 are scrolled rows, not spills.
+                   + ".mmdhelp";
 function ovfName(el) {              // short, stable selector for a failure message
   const c = (el.className && el.className.baseVal !== undefined ? el.className.baseVal : el.className) || "";
   const k = String(c).trim().split(/\s+/).filter(Boolean).slice(0, 2).map(x => "." + x).join("");
@@ -7123,6 +7129,17 @@ function paintHints(g, st) {
    the caret and flips left when the pane has no room, and it is gone whenever
    the engine says there is no ground (outside a fence, a ``` line, a list
    that is up). */
+/* ADR-11: a lesson has a depth. The pill at the right end of a row names the
+   depth that row is set to; a tap opens the five inside the card itself, so the
+   reader picks with words instead of guessing what the next click would do —
+   and no native menu means the editor keeps the focus. `off` is legitimate
+   here precisely because the palette can bring every row back. */
+const DEPTH_WORD = {
+  full: "Show fully", syntax: "Syntax only", example: "Example only",
+  keyword: "Keyword only", off: "Hide this form",
+};
+const DEPTH_SHORT = { full: "all", syntax: "syntax", example: "example", keyword: "keyword", off: "off" };
+
 function paintHelp(g, st) {
   const box = g && g.helpEl;
   if (!box) return;
@@ -7131,6 +7148,9 @@ function paintHelp(g, st) {
   // area is not a target at all (the same swallow the chips do, one level up).
   box.onmousedown = e => e.preventDefault();
   const h = st && st.help;
+  // ADR-11: the level menu belongs to one row at one caret. Moving the caret
+  // puts it away, so it can never float over a different element.
+  if (!h || !g._lvl || (h.at && (g._lvl.l !== h.at.l || g._lvl.c !== h.at.c))) g._lvl = null;
   if (h) {
     box.textContent = "";
     const head = document.createElement("div");
@@ -7185,12 +7205,46 @@ function paintHelp(g, st) {
             toks = document.createElement("div");
             toks.className = "mh-rowt";
             row.appendChild(toks);
-            const d = document.createElement("div");
-            d.className = "mh-rowd";
             const ex = it.ex ? i18n.t(it.ex) + " — " : "";
-            d.textContent = ex + (it.hint ? i18n.t(it.hint) : "");
-            row.appendChild(d);
+            const txt = ex + (it.hint ? i18n.t(it.hint) : "");
+            if (txt) {                         // ADR-11 "syntax only" drops the words, not the row
+              const d = document.createElement("div");
+              d.className = "mh-rowd";
+              d.textContent = txt;
+              row.appendChild(d);
+            }
+            // ADR-11: the depth pill. It only exists on a row, because only a
+            // row is one syntax element — a bare chip list has nothing to grade.
+            if (it.key) {
+              const lv = document.createElement("span");
+              lv.className = "mh-lvl";
+              lv.textContent = i18n.t(DEPTH_SHORT[it.level || "full"]);
+              lv.title = i18n.t("Guide depth");
+              lv.onmousedown = e => {
+                e.preventDefault(); e.stopPropagation();
+                const open = g._lvl && g._lvl.key === it.key;
+                g._lvl = open ? null : { key: it.key, l: h.at.l, c: h.at.c };
+                g._hints.refresh();        // the card redraws in place, the caret stays
+              };
+              row.appendChild(lv);
+            }
             box.appendChild(row);
+            if (it.key && g._lvl && g._lvl.key === it.key) {
+              const menu = document.createElement("div");
+              menu.className = "mh-lvlmenu";
+              Object.keys(DEPTH_WORD).forEach(lvl => {
+                const w = document.createElement("span");
+                w.className = "mh-w tap" + (lvl === (it.level || "full") ? " on" : "");
+                w.textContent = i18n.t(DEPTH_WORD[lvl]);
+                w.onmousedown = e => {
+                  e.preventDefault(); e.stopPropagation();
+                  g._lvl = null;
+                  g._hints.setDepth(it.key, lvl);   // saved intent; the row may now be gone
+                };
+                menu.appendChild(w);
+              });
+              box.appendChild(menu);
+            }
           }
           chip(toks, it);
         });
@@ -7206,9 +7260,16 @@ function paintHelp(g, st) {
     box.style.left = (x + 24 + w > wide ? Math.max(0, x - w - 12) : x + 24) + "px";
     const top = Math.max(0, Math.min(y + 6, g.content.clientHeight - 40));
     box.style.top = top + "px";
-    // the card fits the room the caret leaves, so a 26-chip chooser never ends
-    // under a scrollbar it cannot reach (measured 2026-10-31)
-    box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12) + "px";
+    // the card fits the room the caret leaves, so a 35-chip chooser never ends
+    // under a scrollbar it cannot reach. The room is measured in the WINDOW,
+    // not in the pane: a pane's content box can be taller than the viewport,
+    // and that let 56px of the Markdown card sit below the bottom edge
+    // (measured 2026-10-31, [ovf:0,0,56]). The box is shown FIRST: while it is
+    // `hidden` its rect is empty, and the clamp would be computed from top 0.
+    box.hidden = false;
+    const bh = box.getBoundingClientRect();
+    box.style.maxHeight =
+      Math.max(80, document.documentElement.clientHeight - bh.top - 12) + "px";
   }
   const was = !box.hidden;
   box.hidden = !h;
@@ -7272,6 +7333,16 @@ function cmdCycleHints() {
   HintCore.settings({ mode: next });
   hintsCloseAll("intent");
   say("Completion hints: " + next + (next === "manual" ? " (Ctrl+Space or Tab opens the list)" : ""));
+}
+
+/* ADR-11: a row taken to "off" is not printed (that IS the point), so the way
+   back cannot be a click on it. The command clears every saved depth and asks
+   each pane to repaint its card — a beginner's lesson again, in one step. */
+function cmdResetDepth() {
+  if (!window.HintCore) return;
+  HintCore.resetDepths();
+  for (const g of groups()) { const h = hintsOf(g); if (h) h.refresh(); }
+  say(i18n.t("Guide depth reset: every form is shown again"));
 }
 
 /* ---------- commands + keymap (target the focused group) ---------- */
@@ -9556,6 +9627,7 @@ const CMDS = [
   ["markdown:toggle-preview",  "Toggle reading view",                 ["ctrl+e"],               () => cmdToggleMode(), mdActive],   // graphhdr REQ-14: Obsidian offers it only on a markdown view
   ["editor:toggle-source",     "Toggle Live Preview/Source mode",     [],                       () => cmdToggleSource()],
   ["hints:cycle-intent",       "Cycle completion hints (auto / manual / off)", [],               cmdCycleHints],
+  ["hints:reset-depth",        "Reset guide depth (show every form again)", [],                  cmdResetDepth],
   ["workspace:undo-close-pane","Undo close tab",                      ["ctrl+shift+t"],         async () => { await undoCloseTab(); }],
   ["workspace:split-vertical", "Split right",                         [],                       () => splitGroup(fg(), "row", fg().active)],
   ["workspace:split-horizontal","Split down",                         [],                       () => splitGroup(fg(), "col", fg().active)],

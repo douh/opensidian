@@ -1362,30 +1362,34 @@ const Ed = {
       if (!wa || wa.word !== "sub" || wa.from !== 2 || MH.wordAt("  ") !== null) fail("mmd:word");
     }
     /* The ENGINE (ui/hint-core.js), driven on a fake host: the input flow the
-       popup promises, proven at launch. */
+       popup promises, proven at launch. The host is declared OUT here, not
+       inside the mermaid `else` below: the Markdown (ADR-10) and depth (ADR-11)
+       blocks follow that block, and a host scoped to it is a ReferenceError —
+       which is exactly what the first launch showed as
+       [jserr:Can't find variable: host]. */
+    const host = (src, l, c) => {
+      const L = Array.isArray(src) ? src.slice() : String(src).split("\n");
+      let at = { l, c }; const did = [];
+      return {
+        did, lines: () => L, text: () => L.join("\n"), caret: () => at,
+        fenceAt: (l0, ls) => (MH ? MH.fenceOf({ line: i => ({ text: ls[i - 1] || "" }) }, l0 + 1, ls.length) : null),
+        notes: () => ["Welcome", "Alpha"], current: () => "Home",
+        readNote: n => (n === "Alpha" ? "## Intro\nbody ^blk-id\n" : ""),
+        heads: t => (String(t).match(/^## (.+)$/gm) || []).map(x => ({ text: x.slice(3), level: 2, line: 0 })),
+        rank: (q, s) => (q && String(s).toLowerCase().indexOf(String(q).toLowerCase()) < 0 ? -1 : 0),
+        put(p) { at = { l: p.l, c: p.c }; },
+        type(ch) { L[at.l] = L[at.l].slice(0, at.c) + ch + L[at.l].slice(at.c); at = { l: at.l, c: at.c + ch.length }; },
+        replace: (r, t) => {                      // the model, one line, like the host's Ed.replace
+          did.push({ l: r.l, from: r.from, to: r.to, text: t });
+          L[r.l] = L[r.l].slice(0, r.from) + t + L[r.l].slice(r.to);
+          at = { l: r.l, c: r.from + t.length };
+        },
+      };
+    };
     if (!HC) fail("hint:absent");
     else {
       if (HC.SETTINGS_KEY !== "os.hints") fail("hint:key");
       if (HC.MODES.join(",") !== "auto,manual,off") fail("hint:modes");
-      const host = (src, l, c) => {
-        const L = Array.isArray(src) ? src.slice() : String(src).split("\n");
-        let at = { l, c }; const did = [];
-        return {
-          did, lines: () => L, text: () => L.join("\n"), caret: () => at,
-          fenceAt: (l0, ls) => (MH ? MH.fenceOf({ line: i => ({ text: ls[i - 1] || "" }) }, l0 + 1, ls.length) : null),
-          notes: () => ["Welcome", "Alpha"], current: () => "Home",
-          readNote: n => (n === "Alpha" ? "## Intro\nbody ^blk-id\n" : ""),
-          heads: t => (String(t).match(/^## (.+)$/gm) || []).map(x => ({ text: x.slice(3), level: 2, line: 0 })),
-          rank: (q, s) => (q && String(s).toLowerCase().indexOf(String(q).toLowerCase()) < 0 ? -1 : 0),
-          put(p) { at = { l: p.l, c: p.c }; },
-          type(ch) { L[at.l] = L[at.l].slice(0, at.c) + ch + L[at.l].slice(at.c); at = { l: at.l, c: at.c + ch.length }; },
-          replace: (r, t) => {                      // the model, one line, like the host's Ed.replace
-            did.push({ l: r.l, from: r.from, to: r.to, text: t });
-            L[r.l] = L[r.l].slice(0, r.from) + t + L[r.l].slice(r.to);
-            at = { l: r.l, c: r.from + t.length };
-          },
-        };
-      };
       const en = HC.create(host(["```mermaid", "flowchart TD", "su", "```"], 2, 2), { mode: "auto" });
       en.host.type("b"); en.sense({ typed: "b", moved: true });        // "sub" at a statement start
       if (en.state().phase !== "open" || en.state().id !== "mermaid") fail("hint:open");
@@ -1584,6 +1588,113 @@ const Ed = {
       pend[1]({ items: [{ ins: "new", label: "new" }], range: { l: 2, from: 0, to: 4 } });
       if (e8.state().phase !== "open" || e8.state().items[0].ins !== "new") fail("hint:fresh");
       HC.unregister("self:async");
+    }
+    /* ADR-10: the Markdown guide — the note's own syntax, outside fences.
+       The DATA is checked here too (it is the app's promise: 24 meanings, one
+       row each), and the ENGINE is driven on the same fake host: a blank line
+       offers the whole sheet, a line that already has text offers only what may
+       BEGIN it, prose / a fence body / an existing block marker stay quiet, and
+       a chip lands through the model. tests/markdown_hints.rs pairs every row
+       with the renderer that draws it; this proves the wiring on every launch. */
+    const MD = window.MdHints;
+    if (!MD) fail("md:absent");
+    else {
+      const rows = MD.BLOCKROWS.length + MD.INLINEROWS.length + MD.LINKROWS.length;
+      if (MD.BLOCKROWS.length !== 7 || MD.INLINEROWS.length !== 6 ||
+          MD.LINKROWS.length !== 11 || rows !== 24) fail("md:rows");
+      const blank = MD.helpOf("", "", null);
+      if (!blank || blank.type !== "Markdown" || blank.place !== "Blank line" ||
+          blank.sections.length !== 3 || blank.items.length !== 35) fail("md:blank");
+      if (blank.sections.map(s => s.items.length).join(",") !== "18,6,11") fail("md:blank2");
+      // one row = one meaning: every row's first chip carries the example and
+      // the sentence, every chip is printable, and nothing is listed twice
+      if (blank.sections.reduce((n, s) => n + s.items.filter(it => it.first).length, 0) !== rows) fail("md:first");
+      if (!blank.sections.every(s => s.items.every(it => it.label && it.ex && it.hint))) fail("md:item");
+      const ins = blank.items.map(it => it.ins);
+      if (ins.filter((x, i) => ins.indexOf(x) !== i).length) fail("md:dup");
+      // the block id is printed, not tappable: a tap at a line start could only
+      // put the id in front of the text it labels
+      if (!blank.items.some(it => !it.ins && it.label === "^id")) fail("md:passive");
+      if (blank.items.some(it => !it.ins && it.label !== "^id")) fail("md:passive2");
+      const start = MD.helpOf("", "hello", null);
+      if (!start || start.place !== "Line start" || start.sections.length !== 1 ||
+          start.items.length !== 18) fail("md:start0");
+      if (!MD.helpOf("  ", "", null) || MD.helpOf("  ", "", null).place !== "Blank line") fail("md:indent");
+      if (MD.helpOf("wo", "rd", null)) fail("md:prose");          // the caret is mid-line
+      if (MD.helpOf("", "", "```")) fail("md:fence");             // a code body is not Markdown
+      if (MD.helpOf("", "# x", null) || MD.helpOf("", "- item", null) ||
+          MD.helpOf("", "---", null)) fail("md:marker");          // this line already is a block
+      if (!MD.helpOf("", "-x", null)) fail("md:marker2");         // …but "-x" is prose, not a list
+      const h7 = host(["", "text"], 0, 0), t7 = HC.create(h7, { mode: "auto" });
+      t7.follow();
+      const hl = t7.state().help;
+      if (!hl || hl.id !== "markdown" || hl.place !== "Blank line" || hl.items.length !== 35) fail("md:follow");
+      if (!t7.helpPick({ ins: "## ", label: "##" }) || h7.lines()[0] !== "## ") fail("md:tap");
+      if (t7.helpPick({ ins: "", label: "^id" })) fail("md:notap");
+      const h8 = host(["hello"], 0, 0), t8 = HC.create(h8, { mode: "auto" });
+      t8.follow();
+      if (!t8.state().help || t8.state().help.place !== "Line start" ||
+          t8.state().help.sections.length !== 1) fail("md:start");
+      if (!t8.helpPick({ ins: "- ", label: "-" }) || h8.lines()[0] !== "- hello") fail("md:tapstart");
+      const t9 = HC.create(host(["wo rd"], 1, 2), { mode: "auto" });
+      t9.follow();
+      if (t9.state().help) fail("md:quiet");
+      if (HC.create(host(["- item"], 0, 0), { mode: "auto" }).follow()) fail("md:quiet2");
+      const t10 = HC.create(host(["", "text"], 0, 0), { mode: "manual" });
+      t10.follow();
+      if (t10.state().help) fail("md:intent");
+      // typing never opens a guide: it is a place, not a list
+      const t11 = HC.create(host([""], 0, 0), { mode: "auto" });
+      t11.sense({ typed: "x", moved: true });
+      if (t11.state().phase !== "off" || t11.state().items.length) fail("md:noList");
+    }
+    /* ADR-11: a lesson has a depth. One row of the card is one syntax element,
+       and the reader decides how much of it to keep: syntax (chips, no words),
+       example (the example alone), keyword (the keyword alone), off (no row at
+       all). The level is saved (`os.hints.depths`), so pruning survives the
+       note and the session. Proven on a throwaway provider whose rows are not
+       the user's: its keys are cleared again below, and resetDepths("self:")
+       leaves a real reader's pruning untouched. */
+    {
+      const rows = [
+        { ins: "AA ", label: "AA", hint: "aa", ex: "AA x", first: 1 },
+        { ins: "BB ", label: "BB", first: 0 },
+        { ins: "CC ", label: "CC", hint: "cc", ex: "CC x", first: 1 },
+      ];
+      HC.register({ id: "self:depth", priority: 99, panel: () => ({
+        type: "Depth", place: "Test", sections: [{ name: "Rows", items: rows.slice() }],
+        items: rows.slice() }), panelCommit: () => false });
+      const hd = host(["", "text"], 0, 0), td = HC.create(hd, { mode: "auto" });
+      td.follow();
+      let dh = td.state().help;
+      if (!dh || dh.id !== "self:depth" || dh.items[0].level !== "full" ||
+          !dh.items[0].key) fail("depth:default");
+      if (!td.setDepth("AA ", "syntax")) fail("depth:set");
+      dh = td.state().help;
+      // the row keeps its chips and loses the words; the other row keeps both
+      if (dh.items.length !== 3 || dh.items[0].first !== 1 || dh.items[0].hint ||
+          dh.items[0].ex || dh.items[0].level !== "syntax") fail("depth:syntax");
+      if (!dh.items[0].key || dh.items[2].hint !== "cc") fail("depth:syntax2");
+      td.setDepth("AA ", "example");
+      dh = td.state().help;
+      if (dh.items[0].ins !== "" || dh.items[0].label !== "AA x") fail("depth:example");
+      td.setDepth("AA ", "keyword");
+      dh = td.state().help;
+      if (dh.items[0].ins !== "" || dh.items[0].label !== "AA") fail("depth:keyword");
+      td.setDepth("AA ", "off");
+      dh = td.state().help;
+      // BB shares AA's meaning, so the whole row goes — one row is one element
+      if (!dh || dh.items.length !== 1 || dh.sections[0].items.length !== 1 ||
+          dh.items.some(x => x.key === "AA ")) fail("depth:off");
+      if (HC.settings().depths["self:depth/AA "] !== "off") fail("depth:saved");
+      // the words are a promise: a level the engine does not know is dropped
+      if (HC.settings({ depths: { "x/b": "nope" } }).depths["x/b"]) fail("depth:schema");
+      HC.resetDepths("self:");
+      if (HC.settings().depths["self:depth/AA "]) fail("depth:reset");
+      td.refresh();
+      dh = td.state().help;
+      if (!dh || dh.items.length !== 3 || dh.items[0].hint !== "aa") fail("depth:restored");
+      HC.unregister("self:depth");
     }
     return bad;
   },

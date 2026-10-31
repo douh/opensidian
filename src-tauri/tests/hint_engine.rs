@@ -10,6 +10,7 @@
 //! must not erase:
 //!
 //!   L0  ui/mermaid-syntax.js   vocabulary + pure policy (tests/mermaid_hints.rs)
+//!       ui/markdown-syntax.js  the note's own forms   (tests/markdown_hints.rs)
 //!   L1  ui/hint-core.js        state machine, intent, async ownership  ← this file
 //!   L2  ui/hint-*.js           one provider per syntax, host-only
 //!   L3  ui/main.js             the host + the presenter (and nothing else)
@@ -68,7 +69,8 @@ fn the_layers_load_in_order() {
     // main.js must stay last; a provider that loads before the engine is inert
     // (it returns early), which would be a silent feature loss.
     let html = read("ui/index.html");
-    let order = ["mermaid-syntax.js", "hint-core.js", "hint-mermaid.js", "hint-wiki.js", "main.js"];
+    let order = ["mermaid-syntax.js", "markdown-syntax.js", "hint-core.js", "hint-mermaid.js",
+                 "hint-wiki.js", "hint-markdown.js", "main.js"];
     let mut prev = 0usize;
     for f in order {
         let tag = format!("script src=\"{f}\"");
@@ -83,8 +85,10 @@ fn the_providers_only_speak_the_host_interface() {
     // A provider answers match/trigger/offer/commit and nothing else: it never
     // names the editor, the vault or a node. That is what makes adding a syntax
     // (or fixing a completion) a one-file change.
-    for f in ["ui/hint-mermaid.js", "ui/hint-wiki.js"] {
+    for f in ["ui/hint-mermaid.js", "ui/hint-wiki.js", "ui/hint-markdown.js"] {
         assert_lacks(f, &["document", "Ed.", "notesCache", "acEl", "updateTitle"]);
+    }
+    for f in ["ui/hint-mermaid.js", "ui/hint-wiki.js"] {
         assert_has(f, &["HC.register({", "id: \"", "match(ctx)", "commit(it, ctx, host)"]);
     }
     assert_has("ui/hint-wiki.js", &[
@@ -168,7 +172,7 @@ fn the_tab_gestures_are_separated_and_rebindable() {
         "(e.shiftKey ? \"Shift+\" : \"\") + k;",
         "if (use() !== \"off\" && K.open.indexOf(c) >= 0) {",
         "if (p) { offer(p, ctx, true); return true; }",
-        "window.HintCore = {\n    SETTINGS_KEY: KEY, MODES, KEYS, DEFAULTS,",
+        "window.HintCore = {\n    SETTINGS_KEY: KEY, MODES, KEYS, LEVELS, DEFAULTS,",
     ]);
     // The old file shape (`accept` at the top level) is still read once, so an
     // existing install keeps its accept keys instead of silently resetting.
@@ -210,7 +214,7 @@ fn the_context_layer_is_a_tree_and_its_chips_land_in_the_model() {
     // lands the text with the host's model `replace` — completing the word under
     // the caret or inserting at it. Nothing here owns a key or edits the DOM.
     assert_has("ui/hint-core.js", &[
-        "function syncHelp() {",
+        "function syncHelp(force) {",
         "if (use() === \"auto\" && st.phase !== \"open\") { // a list already says what may be taken",
         "help: st.help ? { id: st.help.id, type: st.help.type, place: st.help.place,",
         "sections: st.help.sections.map(s => ({ name: s.name, note: s.note || \"\",",
@@ -255,7 +259,7 @@ fn the_context_layer_is_a_tree_and_its_chips_land_in_the_model() {
         // the example and the sentence on the right (never a tooltip-only card)
         "if (items.some(it => it.first)) {",
         "row.className = \"mh-row\";",
-        "d.textContent = ex + (it.hint ? i18n.t(it.hint) : \"\");",
+        "d.textContent = txt;",
         "const chip = (parent, it) => {",
         // the click is swallowed, so the caret and the focus stay in the editor
         "box.onmousedown = e => e.preventDefault();",
@@ -264,8 +268,11 @@ fn the_context_layer_is_a_tree_and_its_chips_land_in_the_model() {
         "function loadHintNav() {",
         "fetch(\"hint-nav.json\")",
         // a pointer-live card must fit the room the caret leaves, or its last
-        // rows hide under a scrollbar it cannot reach
-        "box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12)",
+        // rows hide under a scrollbar it cannot reach. The room is the WINDOW's
+        // (a pane's content box is taller than the viewport: measured 56px of
+        // the Markdown card below the bottom edge), and the rect is read AFTER
+        // the box is shown, because a hidden box has no rect to measure from.
+        "document.documentElement.clientHeight - bh.top - 12",
     ]);
     assert_has("ui/style.css", &[".mmdhelp {", "pointer-events: auto", ".mh-sec {", ".mh-note {",
         ".mh-row {", ".mh-rowd {", ".mh-w.tap:hover"]);

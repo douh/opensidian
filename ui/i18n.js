@@ -426,6 +426,61 @@
     "year with century": "年份（含世纪）",
     "timezone offset, e.g. -0700": "时区偏移，例如 -0700",
     "a literal %": "一个字面意义上的 %",
+    /* ADR-10: the Markdown guide outside fences. The syntax itself (chips) is
+       never translated; these are its headings, places, examples' sentences. */
+    "Markdown": "Markdown",
+    "Blank line": "空行",
+    "Line start": "行首",
+    "Line begins with": "行首可以写",
+    "Inside a line": "行内可以写",
+    "Links & embeds": "链接与嵌入",
+    "heading level 1–6; one space after the #s": "1–6 级标题；# 后面要有一个空格",
+    "bullet or numbered list; Enter continues it": "无序或有序列表；回车会接着写下一项",
+    "task; the reading view ticks it; a custom [!] [/] [-] [>] [?] counts as done there":
+      "任务框；阅读视图里可点；[!] [/] [-] [>] [?] 也算已完成（仅阅读视图）",
+    "quote; > > nests": "引用；> > 可以嵌套",
+    "code block; a language after the fence colours it and mermaid draws a diagram; close with the same fence on its own line":
+      "代码块；围栏后写语言（mermaid 会画图）；最后单独一行用同一个围栏收尾",
+    "a table's header row; the next row of | --- | sets the columns and their alignment":
+      "表头行；下一行写 | --- | 定下列与对齐",
+    "horizontal rule (three or more)": "分隔线（三个以上）",
+    "bold": "粗体",
+    "italic": "斜体",
+    "bold and italic": "粗斜体",
+    "strikethrough": "删除线",
+    "highlight in live preview; the reading view keeps the == as text":
+      "实时预览里的高亮；阅读视图暂不解析，== 会原样显示",
+    "inline code": "行内代码",
+    "a link to another note; typing [[ is completed with the vault's note names":
+      "链接到另一篇笔记；输入 [[ 会补全仓库里的笔记名",
+    "a link whose label is different from the note name": "链接文字可以和笔记名不同",
+    "a link to a heading in another note": "链接到另一篇笔记的某个标题",
+    "a link to a block id": "链接到某个块 id",
+    "embed an image from the vault (png, jpg, jpeg, gif, webp)":
+      "嵌入仓库里的图片（png、jpg、jpeg、gif、webp）",
+    "embed a page of a PDF": "嵌入 PDF 的某一页",
+    "a Markdown image from the vault": "Markdown 写法的仓库图片",
+    "a Markdown link to a note, the same link as [[ ]]": "Markdown 写法的笔记链接，和 [[ ]] 等价",
+    "an external link; opens in the browser": "外部链接；在浏览器里打开",
+    "a tag; letters, digits, _ and /; a number alone is not a tag":
+      "标签；可含字母、数字、_ 和 /；纯数字不算标签",
+    "a block id at the end of a block; the reading view hides it, and [[Note#^id]] links to it":
+      "块 id，写在一段或一条列表的末尾；阅读视图会隐藏它，[[Note#^id]] 可以链接到这里",
+
+    /* ADR-11: 语法引导的深度 —— 一个语法项学得越熟，卡片就说得越少。
+       五个档位按“从多到少”排列；药丸上只放短名，菜单里放整句。 */
+    "Guide depth": "引导深度",
+    "Show fully": "全显示（语法 + 例句 + 解释）",
+    "Syntax only": "只显示语法",
+    "Example only": "只显示例句",
+    "Keyword only": "只显示关键字",
+    "Hide this form": "关闭（不再显示这一项）",
+    "all": "全",
+    "syntax": "语法",
+    "example": "例句",
+    "keyword": "关键字",
+    "off": "关",
+    "Guide depth reset: every form is shown again": "引导深度已复位：所有语法项重新显示",
   };
 
   /* Strings the app builds at runtime carry a number: "Version 0.9.0",

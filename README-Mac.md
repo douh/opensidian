@@ -224,9 +224,9 @@ cargo test --locked
 
 | 层 | 文件 | 只负责 |
 |---|---|---|
-| L0 知识 | `ui/mermaid-syntax.js`、`ui/hint-nav.js` + `ui/hint-nav.json` | 词表 + 纯函数（围栏、语句起始、前缀过滤、错误措辞、ADR-8/9 的语法树 `helpOf` 与 `navSections`）；语法导航的机器表（见「Mermaid」一节的「语法导航」）；不认识光标 |
-| L1 引擎 | `ui/hint-core.js` | 状态机、上下文、意图、键位、异步归属；**无 DOM、无 app 全局** |
-| L2 提供者 | `ui/hint-mermaid.js`、`ui/hint-wiki.js` | 为各自语法回答 `match`/`trigger`/`offer`/`commit`（mermaid 另有语法树的 `panel`, ADR-8/9，与芯片落字的 `panelCommit`），只通过 host 接口说话 |
+| L0 知识 | `ui/mermaid-syntax.js`、`ui/markdown-syntax.js`、`ui/hint-nav.js` + `ui/hint-nav.json` | 词表 + 纯函数（围栏、语句起始、前缀过滤、错误措辞、ADR-8/9 的语法树 `helpOf` 与 `navSections`；ADR-10 的笔记语法表 `BLOCKROWS`/`INLINEROWS`/`LINKROWS` 与地面规则）；语法导航的机器表（见「Mermaid」一节的「语法导航」）；不认识光标 |
+| L1 引擎 | `ui/hint-core.js` | 状态机、上下文、意图、键位、异步归属、ADR-11 的深度裁剪；**无 DOM、无 app 全局** |
+| L2 提供者 | `ui/hint-mermaid.js`、`ui/hint-wiki.js`、`ui/hint-markdown.js` | 为各自语法回答 `match`/`trigger`/`offer`/`commit`（mermaid 另有语法树的 `panel`, ADR-8/9，与芯片落字的 `panelCommit`；markdown 是 **PANEL-ONLY**（ADR-10）：只有 `panel`/`panelCommit`，没有列表也没有键），只通过 host 接口说话 |
 | L3 宿主 + 呈现 | `ui/main.js` | `hintHost(g)`（读模型与仓库）、`paintHints`（**唯一**写 `g.acEl` 的地方）、`paintHelp`（ADR-8/9 图层的唯一写点）与 `loadHintNav`（把语法表交给 L0） |
 
 **上下文状态管理。** 每个 pane 一个引擎（`mkGroup` 里 `g._hints = HintCore.create(hintHost(g))`），列表状态跟着 pane 走。引擎把光标、本行前缀、围栏、本次键入收进一个 `ctx` 交给提供者；`state()` 给出可被 census/自检读取的快照（含 `at` 与 `fence`）。
@@ -236,7 +236,7 @@ cargo test --locked
 - 列表打开时，光标**仍在本词跨度内**就跟着重算（左/右移动即重新过滤），离开就结束；
 - 空格/标点/回车让 `match` 不再成立，列表当场结束，而不是"先关、再让字符落进去"。
 
-**用户意图。** `auto`（默认，打字即提示）/ `manual`（只有显式唤出才开：Ctrl+Space 或 Tab）/ `off`（永不），另有按提供者开关与**键位表** `keys`（`open`/`accept`/`dismiss`/`move`，默认值见下）；存在 `localStorage["os.hints"]`。命令面板一行 `hints:cycle-intent` 循环并给出提示当前值；`create(host, { mode, providers })` 可对单个引擎覆盖——自检据此在不改用户设置的前提下证明三种意图。
+**用户意图。** `auto`（默认，打字即提示）/ `manual`（只有显式唤出才开：Ctrl+Space 或 Tab）/ `off`（永不），另有按提供者开关与**键位表** `keys`（`open`/`accept`/`dismiss`/`move`，默认值见下）；存在 `localStorage["os.hints"]`。命令面板一行 `hints:cycle-intent` 循环并给出提示当前值；`create(host, { mode, providers })` 可对单个引擎覆盖——自检据此在不改用户设置的前提下证明三种意图。ADR-11 的**深度**也存在同一个文件（`os.hints.depths`，键是 `提供者/行的首个记号`），见「Markdown」一节的「引导深度」。
 
 **异步归属。** `[[note#` 要跨文件读笔记，答案回来时光标可能已走。每次 `offer` 带一个 generation 令牌，只有最新那次允许上屏（旧实现里那句 `now.q !== ctx.q` 是这颗种子，现在是引擎级规则）。
 
@@ -256,7 +256,7 @@ cargo test --locked
 
 **插入**：两个提供者都走 `host.replace(range, text)` → `Ed.replace`（模型、行锚定、一次撤销、同脏标记、同保存路径）；`Ed.acInsert`/`Ed.acInsertText` 因此删除，全 app 只剩一条插入路径。
 
-**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题、Tab 开/双 Tab 取/Shift+Tab 不插入/无槽 Tab 归还），失败以 `[edt:hint:…]` 出现在窗口标题。`src-tauri/tests/hint_engine.rs`（10 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、ADR-7 的三手势与可改绑、异步令牌，以及 ADR-8/9 的语法树（无键、列表优先、`manual`/`off` 安静、芯片经 `helpPick`/`panelCommit` 落字、卡片吞点击）；`tests/mermaid_hints.rs`（10 条）继续钉住 mermaid 的词表与连线、"只有打字能开"的输入流，以及语法表的来源（`ui/hint-nav.json` 的 meta）与 CSP 的同源放行。`tests/hint_nav.rs`（5 条）钉住 mermaid 语法表。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现，`[hinthelp:<provider>:<type>:<place>:<n>]` 在图层显示时出现（`type` 为 `-` 表示还没写图表指令）。
+**证据**：`Ed.selfTest()` 启动时用**假 host 驱动真引擎**跑一遍输入流（打字开、Enter 取用、空格/粘贴/光标离开结束、manual 与 off、异步过期丢弃、`[[` 与标题、Tab 开/双 Tab 取/Shift+Tab 不插入/无槽 Tab 归还），失败以 `[edt:hint:…]` 出现在窗口标题。ADR-10 的笔记语法与 ADR-11 的深度也在启动时跑（`[edt:md:…]`、`[edt:depth:…]`；深度用一次性提供者 `self:depth` 驱动，`resetDepths("self:")` 清掉自己的键，绝不写真正的用户裁剪）。`src-tauri/tests/hint_engine.rs`（10 条）钉住层序与边界：引擎无 `document`/`Ed.`、提供者只碰 host、意图键是 `os.hints`、每 pane 一引擎、键位归属、ADR-7 的三手势与可改绑、异步令牌，以及 ADR-8/9 的语法树（无键、列表优先、`manual`/`off` 安静、芯片经 `helpPick`/`panelCommit` 落字、卡片吞点击）；`tests/mermaid_hints.rs`（10 条）继续钉住 mermaid 的词表与连线、"只有打字能开"的输入流，以及语法表的来源（`ui/hint-nav.json` 的 meta）与 CSP 的同源放行。`tests/markdown_hints.rs`（8 条）钉住笔记语法的数据、地面、渲染配对、排除项、panel-only 与深度。`tests/hint_nav.rs`（5 条）钉住 mermaid 语法表。探针 token：`[hintmode:auto|manual|off]` 常在，`[hint:open:<provider>:<n>:<首个候选>]` 只在列表打开时出现，`[hinthelp:<provider>:<type>:<place>:<n>]` 在图层显示时出现（`type` 为 `-` 表示还没写图表指令，`place` 为 `Blank_line`/`Line_start` 表示笔记语法的地面）。
 
 ## Mermaid：围栏里的语法提示
 
@@ -272,6 +272,7 @@ cargo test --locked
 - **真实性**：`HINTS-BEGIN/HINTS-END` 之间的每个字符串都是"词表声明"，`src-tauri/tests/mermaid_hints.rs` 逐条在 `ui/vendor/mermaid/mermaid.min.js` 里查存在——提议 Mermaid 会拒绝的语法比不提更糟。因此 `zenuml`（11.17.2 的解析图里没有该 parser）与 ER 基数符号（压缩后的 lexer 由碎片拼出，无字面量可查）**故意不收**。
 - **语法导航**：光标停在 `A--` 后面该接什么，不是风格问题，是 mermaid 自己语法的事。两层各有各的答案：字符层由 lexer 决定（`o`/`x`/`>`/`-` 才是箭头，其他字符开始边文本，`"` 静默进 `string` 条件），token 层由 LALR 表决定（`A-->` 之时期望 13 个 token，含节点 `NODE_STRING`/`UNICODE_TEXT` 与开标签的 `PIPE`）。表不是手写的：`tools/vendor/flow-11.17.2.jison`（上游 `mermaid@11.17.2` 的 `flow.jison`，MIT，sha256 `b95d5a12…e384`）在**构建期**被 jison 0.4.18 编译一次，由 `tools/gen-hint-nav.js` 写成 `ui/hint-nav.json`（291 状态 / 4142 格 / 190 产生式 / 84 终结符 / 122 条词法规则 / 21 个条件，约 68 KB）。应用里**不装 jison、不跑 jison、不做 eval**：`ui/hint-nav.js` 只解释这份数据（`load`/`tokenize`/`drive`/`at`/`chars`），无 DOM、无 app 全局，`prefix` 必须从围栏体起算（`graph` 打开 `dir`、`--` 打开 `edgeText`，且 mermaid 的 `firstGraph()` 只认第一个 `graph`）。于是提示内容由**光标位置**决定，字母只改过滤词。重建：`npm i --prefix /tmp/hint-nav-tool jison@0.4.18 && NODE_PATH=/tmp/hint-nav-tool/node_modules node tools/gen-hint-nav.js`（装在仓外，避免 node_modules 弄脏工作树；`--check` 只比对不写；数据是单行紧凑 JSON，改一个字节就是一次可评审的 diff）。验收：`node tools/selftest-hint-nav.js`（45 条断言，零依赖，`A--` 字符类、`A-->` 期望、`A-->B` 收尾、词法错误不抛不转圈），Rust 侧 `src-tauri/tests/hint_nav.rs` 5 条（重算语法 sha256、表规模、运行时纯净、脚本层序、生成器与自检仍在）。移植时还与 jison 逐 token 对拍过 133 个输入（53 条语料 + 一张真实图的每个前缀），token 名与词法状态全等；已知上游死 token（`SEP`/`QUOTE`，语法里没有对应产生式）如实写进 `meta.deadTokens`，运行时按 jison 的"无 token"路径跳过。
   **接线（ADR-9）**：`loadHintNav()` 在启动时把表交给 `window.HintNav`，`hint-mermaid.js` 的 `panel` 在 flowchart 的每个光标处把围栏体前缀交给 `M.helpOf(prev, prefix, window.HintNav)`，树的第四层就是表自己的答案；同一函数在没有表时退回 `KW` 分组。补全列表（`offer`）仍走原来的 `M.suggest`——表只驱动图层，不改变列表的取用语义。
+- **上游版本**：mermaid 是开源项目，这里的词表以 **pin 住的字节**为准（`ui/vendor/mermaid/` 为 11.17.2，`VENDOR.md`/`SHA256SUMS` 同版本）。升级前先看 [mermaid-js/mermaid releases](https://github.com/mermaid-js/mermaid/releases)，再跑 `mermaid_pin.rs`（字节 sha256 会先红）、`hint_nav.rs`（用上游新一代 `flow.jison` 重算表）、`mermaid_hints.rs`（词表在 bundle 里仍存在）——三条都绿才算升完；开源不等于可以凭记忆改词表，语法是否被接受仍以这份字节为准。
 
 真机验证（macOS 探针，非自动化测试，输入法切 ABC 后按键才不被候选栏截走）：围栏内接在 `sub` 后打 `b` 弹出唯一候选 `subgraph`，Enter 取用后落盘且列表关闭；一次 `keystroke` 连发 `su`（并批）同样弹出；空格落下、列表当场关闭（此时 Enter 才是换行）；Esc 关闭；粘贴 `xy`、在 `A[Open] --> B` 行中段打 ` e` 都**不**弹；坏图在阅读视图与 Live Preview 各显示 `line 2: A[Start] -->|open| (`；标题为 `[edt:ok]`、`[hintmode:auto]`。
 
@@ -282,6 +283,34 @@ ADR-9 的真机验证（同一套探针，2026-10-31，debug 二进制 + `CGEven
 子句值层的真机验证（同一套探针，2026-10-31，`gantt` 图）：①**值层真的换内容**：`dateFormat YYY` 行中 token 是 `[hinthelp:mermaid:gantt:Top-level_statement:30]`（30 个 gantt 值记号，而不是 17 个子句关键字），卡片按表显示——`gantt` / `顶层语句` / `日期格式` / 一行 `dayjs 记号…默认 YYYY-MM-DD；更多：day.js.org/…` / 每行左侧记号、右侧 `例子 — 解释`（`YYYY 2014 — 四位数年份`、`M MM 1..12 — 月份 1–12`、`DDD DDDD 1..365 — 当年第几天 1–365`、`X … — Unix 时间戳（秒）`…），超出卡片高度时纵向滚动；②**点子句里的芯片补半个值**：点 `YYYY` 芯片后 `Probe.md` 的 `dateFormat YYY` 变成 `dateFormat YYYY`（光标 `2.14 → 2.15`，只替换了这半个值，文件已落盘），图层仍在值层；③**指令行仍是分组**：`gantt` 行末是 `…:17`，与值层的 `30` 明确区分。
 
 合并姿态：上游若自带补全，**取上游**的弹窗与词表——我们的引擎/提供者是平台无关的 L2 上，冲突面只有 `index.html` 的脚本顺序、`onUpdate/onKey` 的两个缝和 `main.js` 的宿主/呈现函数；`errText` 那行错误说明与 `.mmderr` 样式仍以小补丁加回。上游不做则整块原样保留（`hint_engine.rs` 的 10 条 + `mermaid_hints.rs` 的 10 条保证它不会被某次重构顺手删掉）。
+
+## Markdown：笔记本身的语法引导（ADR-10）
+
+这一层不是为了"用 AI 复刻一个 Obsidian"，也不是把 Obsidian 的帮助文档搬过来。Opensidian 存在的意义是**让人自己把知识库写起来**：人愿意写，才会持续写。所以笔记自己的语法也应该像围栏里的 mermaid 一样，在**光标所在的地面**上说清"这里能写什么"，而且说清的方式要能教人，而不是替人写。ADR-10 把 ADR-8/9 的那张卡推广到 `.md` 正文：同一棵被动语法树、同一张"例子 — 解释"的表、同样可点的芯片、**不新增任何按键、不让 AI 代笔**。
+
+- **范围（只教这个 app 真的会画的东西）**：`ui/markdown-syntax.js` 的 `GUIDE-BEGIN/END` 之间是三张表——`BLOCKROWS`（行首可以写的 7 种块：标题、列表、任务、引用、围栏、表格、分隔线）、`INLINEROWS`（行内 6 种：粗体、斜体、粗斜体、删除线、高亮、行内代码）、`LINKROWS`（双链 4 种、嵌入 2 种、Markdown 图片/内链/外链、`#tag`、块 id）。共 **24 个含义、35 个芯片**，一行只讲一件事，`first:1` 让 `paintHelp` 把这一行印成表（左侧记号，右侧 `例子 — 解释`），与 gantt 的 `dateFormat` 表同一种形状。芯片点击经 `helpPick` → `panelCommit` → `host.replace`，落字是**模型改动、一次撤销**，与 ADR-9 完全相同。
+- **地面（卡片说话的时机）**：只在"一行可以开始"的地方——光标左侧只有空白（`/^[ \t]*$/`），且这一行右侧不以块标记开头（`MARKER`，`#`/`>`/`|`/围栏/分隔线/`- ` /`1. `）。**空行**给完整速查（行首 / 行内 / 链接与嵌入三段），**已有文字的行首**只给"行首可以写"（否则在正文中间弹出行内模板，点一下就把文字挤到后面）；散文中间、围栏体内、已经是块的行都静默——和 mermaid"散文处不弹"是同一条纪律。`-x` 是散文不是列表，`#tag` 是标签不是标题，`MARKER` 因此只认"`-` + 空格"这类真块首。
+- **只做面板的提供者（引擎唯一的改动）**：`ui/hint-markdown.js` 只有 `panel`/`panelCommit`，没有 `match`/`offer`/`commit`，所以任何按键都开不出它，`syncHelp` 的"列表优先"也无需特判。为此 `register` 接受"面板型"（`lists` 三者齐全才算列表，否则要求 `panel`），`owner()` 跳过没有 `match` 的提供者。这是 ADR-10 对 L1 的**全部**扩展。
+- **故意不收（parsed 但没画，或不是 Obsidian 的写法）**：callout（`> [!NOTE]` 在 `html.rs` 里变成 `class="markdown-alert-*"`，仓库里**没有**这份 CSS，阅读视图是素引用块）、数学（`$…$` 只输出原文字、不排版）、`%%…%%`（只有调色板插入，没有隐藏或渲染）、frontmatter（`MetadataBlock` 什么都不写）、definition list、`^sup^`/`~sub~`（会解析成 `<sup>/<sub>`，但不是 Obsidian 语法）。教一个"看得到但没效果"的写法，比不教更伤人，理由就写在数据文件头。
+- **两个视图的差异如实说**：`==marked==` 只在 Live Preview 高亮，阅读视图保留 `==` 文本（`pulldown-cmark` 没有 highlight 事件）——这一行的解释里写着这条限制；`![[doc.pdf#page=3]]` 阅读视图走 `is_pdf_target`；`#tag` 的字符规则来自 `index.rs` 的 `is_tag_char`（字母/数字/`_`/`/`，首字符必须是字母或 `_`，纯数字不算）；`^id` 只写在块末尾，阅读视图用 CSS 隐藏（`ui/editor.js` **不**画 `.blockid`，所以卡片只说阅读视图会隐藏，不说"实时预览是灰的"）。
+- **证据**：`src-tauri/tests/markdown_hints.rs` 8 条——数据（24 行、每行都有例子与中文解释、没有重复芯片）、地面、**每个形态都能在渲染器里找到锚点**（Live Preview 的正则 ↔ 阅读视图的事件/CSS，26 个配对；`==` 明确没有阅读视图锚点并在解释里自陈）、排除项不出现、panel-only 与引擎两处扩展、层序与 `PANEL_MAX ≥ 35`。启动自检 `[edt:md:…]` 用真引擎跑空行/行首/散文/围栏/块首与点芯片落字。真机探针 `[hinthelp:markdown:Markdown:Blank_line:35]` / `…:Line_start:18`。
+
+### 引导深度（ADR-11）
+
+语法引导对用户是一个**学习过程**，所以"说多少"不该由开发者一次定死：一个写了十年 `##` 的人不该再被教 `##` 是什么。ADR-11 给**每一行**（即每一个语法元素）一个深度，存在 `os.hints.depths`（键是 `提供者/行的首个记号`，如 `markdown/# `），和意图、键位一起持久化——换笔记、换会话都不丢：
+
+| 档位 | 卡片显示 | 适合 |
+|---|---|---|
+| `full` | 芯片 + 例子 + 解释 | 生手（默认） |
+| `syntax` | 只有芯片（仍可点落字） | 会用、只需看到写法 |
+| `example` | 只有例句（不可点） | 照例句自己敲 |
+| `keyword` | 只有关键字（不可点） | 只要提醒 |
+| `off` | 这一行完全不出现 | 已成手 |
+
+- **怎么改**：每行右端有一个小药丸（写着当前档位：`全`/`语法`/`例句`/`关键字`），点它在**卡片内部**展开五个档位，选一个即可——不弹原生菜单、不抢焦点、光标不动。`syntax` 档把说明文字去掉但**保留行与药丸**（否则它就无法再改回去）；`example`/`keyword` 档会把记号变成不可点的例子/关键字，行仍在。
+- **怎么回来**：`off` 的行是真的不画（这是它的定义），所以点不到它；命令面板一行 `hints:reset-depth`（"Reset guide depth (show every form again)"）清空所有深度并让每个 pane 立刻重画，状态栏会说一句"引导深度已复位"。
+- **一行的边界**：`first:1` 起头、直到下一个 `first` 的芯片都属于同一行——gantt 的 `M MM` 共享"月份"就是一个元素，裁剪一起走；没有行的卡片（26 种图表类型的平铺列表）没有"语法元素"可分，保持整块，不造假行。
+- **证据**：引擎侧 `shapeHelp` 在 `syncHelp` 里裁剪（快照已裁，视图不知道深度的存在），`sameHelp` 把 `level`/`label` 也算进同一性，因此裁剪会立刻重画；启动自检用一次性提供者 `self:depth` 跑五档 + 持久化 + `resetDepths("self:")` 还原（绝不碰真实用户的键）；`tests/markdown_hints.rs` 的 `a_row_can_be_pruned_and_brought_back` 钉住五档、药丸、回位命令与 12 条中文文案。
 
 ## 许可
 
