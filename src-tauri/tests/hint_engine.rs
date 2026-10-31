@@ -251,6 +251,12 @@ fn the_context_layer_is_a_tree_and_its_chips_land_in_the_model() {
         // level 4: the clause's note line and a token's meaning as a tooltip
         "nt.className = \"mh-note\";",
         "if (it.hint) w.title = i18n.t(it.hint);",
+        // ...and as a printed table: one row per meaning, tokens on the left,
+        // the example and the sentence on the right (never a tooltip-only card)
+        "if (items.some(it => it.first)) {",
+        "row.className = \"mh-row\";",
+        "d.textContent = ex + (it.hint ? i18n.t(it.hint) : \"\");",
+        "const chip = (parent, it) => {",
         // the click is swallowed, so the caret and the focus stay in the editor
         "box.onmousedown = e => e.preventDefault();",
         "w.onmousedown = e => { e.preventDefault(); e.stopPropagation(); g._hints.helpPick(it); };",
@@ -261,14 +267,16 @@ fn the_context_layer_is_a_tree_and_its_chips_land_in_the_model() {
         // rows hide under a scrollbar it cannot reach
         "box.style.maxHeight = Math.max(80, g.content.clientHeight - top - 12)",
     ]);
-    assert_has("ui/style.css", &[".mmdhelp {", "pointer-events: auto", ".mh-sec {", ".mh-note {", ".mh-w.tap:hover"]);
+    assert_has("ui/style.css", &[".mmdhelp {", "pointer-events: auto", ".mh-sec {", ".mh-note {",
+        ".mh-row {", ".mh-rowd {", ".mh-w.tap:hover"]);
     // and the layer is proven on every launch, not only here
     assert_has("ui/editor.js", &[
         "fail(\"help:types\")", "fail(\"help:vocab\")", "fail(\"help:block\")",
         "fail(\"help:list\")", "fail(\"help:intent\")",
         "fail(\"help:sections\")", "fail(\"help:nav2\")", "fail(\"help:arrow\")",
         "fail(\"help:tap2\")", "fail(\"help:tapreplace2\")", "fail(\"help:tapattach\")",
-        "fail(\"help:pad\")", "fail(\"help:gantt2\")", "fail(\"help:gantttap\")",
+        "fail(\"help:pad\")", "fail(\"help:gantt2\")", "fail(\"help:gantt9\")",
+        "fail(\"help:gantt10\")", "fail(\"help:axis2\")", "fail(\"help:gantttap\")",
         "fail(\"help:ganttfill\")",
     ]);
     // The engine still never touches a node, and the layer still has no vocabulary

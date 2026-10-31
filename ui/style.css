@@ -736,7 +736,7 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
    engine. It sits below the .ac list in z (5 vs 6) because the list is the
    thing you are picking from when both are up; it only takes clicks on the
    card itself, not on the pane underneath. */
-.mmdhelp { position: absolute; z-index: 5; max-width: 320px;
+.mmdhelp { position: absolute; z-index: 5; max-width: 360px;
            overflow-y: auto; background: var(--bg-elevated); border: 1px solid var(--border);
            border-radius: 6px; padding: 8px 10px; font-size: 12px; opacity: .97;
            box-shadow: 0 2px 8px rgba(0,0,0,.18); pointer-events: auto; user-select: none }
@@ -746,8 +746,14 @@ body { display: flex; font: 14px/1.5 var(--font-interface);
 .mh-sec { color: var(--text-chrome-dim); margin: 6px 0 3px; font-size: 11px;
           letter-spacing: .02em }
 .mh-note { color: var(--text-chrome-dim); margin: -1px 0 4px; font-size: 10px;
-           line-height: 1.35 }
+           line-height: 1.35; overflow-wrap: anywhere }
 .mh-words { display: flex; flex-wrap: wrap; gap: 4px 6px }
+/* a value level is read as a table: tokens on the left, their meaning on the
+   right, one row per meaning (`M MM` = month) — see ADR-9 level 4 */
+.mh-row { display: flex; align-items: baseline; gap: 8px; margin: 1px 0 }
+.mh-rowt { display: flex; flex-wrap: wrap; gap: 3px 5px; min-width: 62px }
+.mh-rowd { flex: 1; color: var(--text-chrome-dim); font-size: 10.5px; line-height: 1.35;
+           overflow-wrap: anywhere }
 .mh-w { padding: 1px 6px; border: 1px solid var(--border); border-radius: 4px;
         white-space: nowrap; font-family: var(--font-monospace) }
 .mh-w.tap { cursor: pointer }

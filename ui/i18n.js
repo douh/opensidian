@@ -376,8 +376,10 @@
     "Axis format": "坐标轴格式",
     "Excluded days": "排除的日子",
     "Included days": "纳入的日子",
-    "dayjs tokens, spaced as you like; default YYYY-MM-DD": "dayjs 记号，可按需加分隔符；默认 YYYY-MM-DD",
-    "d3 time-format tokens; default %Y-%m-%d": "d3 时间格式记号；默认 %Y-%m-%d",
+    "dayjs tokens, spaced as you like; default YYYY-MM-DD; more: day.js.org/docs/en/parse/string-format":
+      "dayjs 记号，可按需加分隔符；默认 YYYY-MM-DD；更多：day.js.org/docs/en/parse/string-format",
+    "d3 time-format tokens; default %Y-%m-%d; more: github.com/d3/d3-time-format#locale_format":
+      "d3 时间格式记号；默认 %Y-%m-%d；更多：github.com/d3/d3-time-format#locale_format",
     "comma-separated days left out of the calendar": "逗号分隔，排期时跳过的日子",
     "comma-separated days added to the calendar": "逗号分隔，排期时额外计入的日子",
     "the default layout, e.g. 2014-08-01": "默认写法，例如 2014-08-01",
@@ -407,7 +409,7 @@
     "full month name": "完整月份名",
     "date and time": "日期与时间",
     "day of month, zero-padded [01,31]": "当月日期，补零 [01,31]",
-    "day of month [ 1,31]": "当月日期 [ 1,31]",
+    "day of month [ 1,31]; same as %_d": "当月日期 [ 1,31]；等价于 %_d",
     "hour, 24-hour [00,23]": "小时（24 小时制）[00,23]",
     "hour, 12-hour [01,12]": "小时（12 小时制）[01,12]",
     "day of year [001,366]": "当年第几天 [001,366]",

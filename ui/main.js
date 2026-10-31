@@ -7159,20 +7159,47 @@ function paintHelp(g, st) {
         nt.textContent = i18n.t(sec.note);
         box.appendChild(nt);
       }
-      const words = document.createElement("div");
-      words.className = "mh-words";
-      sec.items.forEach(it => {
+      // one chip: a token the layer says is legal here. `it.ins` non-empty =
+      // a tap; a passive token is only a word (a group caption, an example).
+      const chip = (parent, it) => {
         const w = document.createElement("span");
         const tap = typeof it.ins === "string" && it.ins.length > 0;
         w.className = tap ? "mh-w tap" : "mh-w";
         w.textContent = it.label;
         if (it.hint) w.title = i18n.t(it.hint);  // what the token means, before it lands
-        if (tap) {                             // a chip inserts; a passive token is only a word
+        if (tap) {
           w.onmousedown = e => { e.preventDefault(); e.stopPropagation(); g._hints.helpPick(it); };
         }
-        words.appendChild(w);
-      });
-      box.appendChild(words);
+        parent.appendChild(w);
+      };
+      const items = sec.items || [];
+      if (items.some(it => it.first)) {
+        // a value level is a TABLE: every row is one meaning and the tokens
+        // that share it (`M MM` = month), so the meaning is printed beside the
+        // tokens instead of hidden in a tooltip — the panel itself explains.
+        let row = null, toks = null;
+        items.forEach(it => {
+          if (it.first || !row) {
+            row = document.createElement("div");
+            row.className = "mh-row";
+            toks = document.createElement("div");
+            toks.className = "mh-rowt";
+            row.appendChild(toks);
+            const d = document.createElement("div");
+            d.className = "mh-rowd";
+            const ex = it.ex ? i18n.t(it.ex) + " — " : "";
+            d.textContent = ex + (it.hint ? i18n.t(it.hint) : "");
+            row.appendChild(d);
+            box.appendChild(row);
+          }
+          chip(toks, it);
+        });
+      } else {
+        const words = document.createElement("div");
+        words.className = "mh-words";
+        items.forEach(it => chip(words, it));
+        box.appendChild(words);
+      }
     });
     const [x, y] = Ed.caretXY(g);
     const w = box.offsetWidth || 240, wide = g.content.clientWidth;

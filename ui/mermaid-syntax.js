@@ -70,8 +70,9 @@
      not name is still legal, so this is guidance, not a closed set. */
   const ARGTOK = {
     gantt: {
-      dateFormat: ["YYYY-MM-DD", "YYYY", "YY", "Q", "M", "MM", "MMM", "MMMM", "D", "DD", "Do", "DDD", "X", "x",
-        "H", "HH", "h", "hh", "a", "A", "m", "mm", "s", "ss", "S", "SS", "SSS", "Z", "ZZ"],
+      dateFormat: ["YYYY-MM-DD", "YYYY", "YY", "Q", "M", "MM", "MMM", "MMMM", "D", "DD", "Do", "DDD",
+        "DDDD", "X", "x", "H", "HH", "h", "hh", "a", "A", "m", "mm", "s", "ss", "S", "SS", "SSS",
+        "Z", "ZZ"],
       axisFormat: ["%Y-%m-%d", "%a", "%A", "%b", "%B", "%c", "%d", "%e", "%H", "%I", "%j", "%m",
         "%M", "%L", "%p", "%S", "%U", "%w", "%W", "%x", "%X", "%y", "%Y", "%Z", "%%"],
       excludes: ["weekend", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"],
@@ -327,12 +328,13 @@
      as a tooltip, so a tap can be understood before it lands. */
   const ARGDESC = {
     "YYYY-MM-DD": "the default layout, e.g. 2014-08-01",
+    "%Y-%m-%d": "the default layout, e.g. 2014-08-01",
     YYYY: "four-digit year", YY: "two-digit year",
     Q: "quarter (sets the month to the quarter's first month)",
     M: "month 1–12", MM: "month 1–12",
     MMM: "month name in dayjs.locale()", MMMM: "month name in dayjs.locale()",
     D: "day of month 1–31", DD: "day of month 1–31", Do: "day of month with an ordinal",
-    DDD: "day of year 1–365",
+    DDD: "day of year 1–365", DDDD: "day of year 1–365",
     X: "unix timestamp in seconds", x: "unix timestamp in milliseconds",
     H: "hour 0–23", HH: "hour 0–23", h: "hour 1–12", hh: "hour 1–12",
     a: "am or pm", A: "am or pm",
@@ -342,7 +344,7 @@
     "%a": "abbreviated weekday name", "%A": "full weekday name",
     "%b": "abbreviated month name", "%B": "full month name",
     "%c": "date and time", "%d": "day of month, zero-padded [01,31]",
-    "%e": "day of month [ 1,31]", "%H": "hour, 24-hour [00,23]",
+    "%e": "day of month [ 1,31]; same as %_d", "%H": "hour, 24-hour [00,23]",
     "%I": "hour, 12-hour [01,12]", "%j": "day of year [001,366]",
     "%m": "month [01,12]", "%M": "minute [00,59]", "%L": "milliseconds [000,999]",
     "%p": "am or pm", "%S": "second [00,61]",
@@ -352,24 +354,69 @@
     "%Y": "year with century", "%Z": "timezone offset, e.g. -0700",
     "%%": "a literal %",
   };
+  /* What the token looks like in a real date (the "example" column of Mermaid's
+     own gantt page). Prose too: a token's example is not a token. */
+  const ARGEX = {
+    "YYYY-MM-DD": "2014-08-01", YYYY: "2014", YY: "14", Q: "1..4", M: "1..12", MM: "1..12",
+    MMM: "Jan..Dec", MMMM: "January..December", D: "1..31", DD: "1..31", Do: "1st..31st",
+    DDD: "1..365", DDDD: "1..365", X: "1410715640.579", x: "1410715640579",
+    H: "0..23", HH: "0..23", h: "1..12", hh: "1..12", a: "am/pm", A: "AM/PM",
+    m: "0..59", mm: "0..59", s: "0..59", ss: "0..59", S: "0..9", SS: "0..99", SSS: "0..999",
+    Z: "+12:00", ZZ: "+1200",
+    "%Y-%m-%d": "2014-08-01", "%a": "Mon", "%A": "Monday", "%b": "Jan", "%B": "January",
+    "%c": "Mon Jan 1 00:00:00 2014", "%d": "01..31", "%e": "1..31", "%H": "00..23",
+    "%I": "01..12", "%j": "001..366", "%m": "01..12", "%M": "00..59", "%L": "000..999",
+    "%p": "AM/PM", "%S": "00..61", "%U": "00..53", "%w": "0..6", "%W": "00..53",
+    "%x": "01/01/2014", "%X": "00:00:00", "%y": "00..99", "%Y": "2014", "%Z": "-0700",
+    "%%": "%",
+  };
+  /* The rows of a value table: tokens that SHARE one meaning sit on one row
+     (`M MM` are both "month"), so the table reads like Mermaid's own page
+     instead of one chip per token with the meaning hidden in a tooltip. Every
+     token here must also be in ARGTOK (the verified list above); the panel
+     self-test counts the rows and the tokens, so the two cannot drift. */
+  const ARGROWS = {
+    gantt: {
+      dateFormat: [["YYYY-MM-DD"], ["YYYY"], ["YY"], ["Q"], ["M", "MM"], ["MMM", "MMMM"],
+        ["D", "DD"], ["Do"], ["DDD", "DDDD"], ["X"], ["x"], ["H", "HH"], ["h", "hh"], ["a", "A"],
+        ["m", "mm"], ["s", "ss"], ["S"], ["SS"], ["SSS"], ["Z", "ZZ"]],
+      axisFormat: [["%Y-%m-%d"], ["%a"], ["%A"], ["%b"], ["%B"], ["%c"], ["%d"], ["%e"],
+        ["%H"], ["%I"], ["%j"], ["%m"], ["%M"], ["%L"], ["%p"], ["%S"], ["%U"], ["%w"],
+        ["%W"], ["%x"], ["%X"], ["%y"], ["%Y"], ["%Z"], ["%%"]],
+    },
+  };
   /* A clause's value level: its caption, and one line of how to read it. Both
      are i18n keys, like SECTION and `place`. */
   const ARGSEC = { dateFormat: "Date format", axisFormat: "Axis format",
                    excludes: "Excluded days", includes: "Included days" };
   const ARGNOTE = {
-    dateFormat: "dayjs tokens, spaced as you like; default YYYY-MM-DD",
-    axisFormat: "d3 time-format tokens; default %Y-%m-%d",
+    dateFormat: "dayjs tokens, spaced as you like; default YYYY-MM-DD; more: day.js.org/docs/en/parse/string-format",
+    axisFormat: "d3 time-format tokens; default %Y-%m-%d; more: github.com/d3/d3-time-format#locale_format",
     excludes: "comma-separated days left out of the calendar",
     includes: "comma-separated days added to the calendar",
   };
 
   /* The value section for a clause, or null when its value is not something we
-     can name here (the caller then falls back to the clause list, or silence). */
+     can name here (the caller then falls back to the clause list, or silence).
+     A value with rows gets `first: 1` on the row's first token: the pane prints
+     the meaning beside that row and lets the rest of the row's tokens follow. */
   function argSections(key, word) {
     const toks = ARGTOK[key] && ARGTOK[key][word];
     if (!toks) return null;
-    return [{ name: ARGSEC[word] || word, note: ARGNOTE[word] || "",
-              items: toks.map(t => ({ ins: t, label: t, hint: ARGDESC[t] || "" })) }];
+    const rows = ARGROWS[key] && ARGROWS[key][word];
+    let items;
+    if (rows) {
+      items = [];
+      for (const r of rows) for (let i = 0; i < r.length; i++) {
+        const t = r[i];
+        if (toks.indexOf(t) < 0) continue;            // a row may not invent a token
+        items.push({ ins: t, label: t, hint: ARGDESC[t] || "", ex: ARGEX[t] || "",
+                     first: i === 0 ? 1 : 0 });
+      }
+    } else {
+      items = toks.map(t => ({ ins: t, label: t, hint: ARGDESC[t] || "" }));
+    }
+    return [{ name: ARGSEC[word] || word, note: ARGNOTE[word] || "", items }];
   }
 
   /* The clause the caret stands in: the line's first word (its head) and what

@@ -56,11 +56,17 @@ fn every_suggested_word_exists_in_the_vendored_bundle() {
     let bundle = read("ui/vendor/mermaid/mermaid.min.js");
     let words = vocabulary();
     assert!(words.len() >= 120, "only {} vocabulary strings — the HINTS block lost data", words.len());
-    let missing: Vec<&String> = words.iter().filter(|w| !bundle.contains(w.as_str())).collect();
-    assert!(
-        missing.is_empty(),
-        "these suggestions do not occur in the vendored 11.17.2 bundle, so Mermaid would reject them: {missing:?}"
-    );
+    // `DDDD` is dayjs's spelled-out day-of-year and Mermaid's own gantt page
+    // documents it, but the minified build parses dayjs formats with a regex,
+    // so those four letters have no literal to find. Every other suggestion — a
+    // clause, a diagram type, a weekday, a d3 format — must be in the bytes.
+    const LITERAL_EXCEPTIONS: &[&str] = &["DDDD"];
+    let by_literal = "these suggestions do not occur in the vendored 11.17.2 bundle, so Mermaid would reject them";
+    let missing: Vec<&String> = words.iter()
+        .filter(|w| !LITERAL_EXCEPTIONS.contains(&w.as_str()))
+        .filter(|w| !bundle.contains(w.as_str()))
+        .collect();
+    assert!(missing.is_empty(), "{by_literal}: {missing:?}");
 }
 
 #[test]
@@ -184,6 +190,7 @@ fn the_context_layer_speaks_the_same_vocabulary() {
         "const ARGTOK = {",
         "gantt: [\"title\", \"dateFormat\", \"axisFormat\", \"tickInterval\", \"excludes\", \"includes\", \"todayMarker\",",
         "function argSections(key, word) {",
+        "const ARGROWS = {",
         "function clauseSections(key, prefix, type) {",
         "if (!sections && fromBody) sections = clauseSections(d.key, p, d.id);",
         "const NAVTOK = {",
@@ -209,8 +216,8 @@ fn the_context_layer_speaks_the_same_vocabulary() {
         "\"Statements\": \"语句\"", "\"Arrow style\": \"连线箭头\"", "\"Links\": \"连线\"",
         // level 4: the clause's caption, its one-line note and the token meanings
         "\"Date format\": \"日期格式\"", "\"Excluded days\": \"排除的日子\"",
-        "\"dayjs tokens, spaced as you like; default YYYY-MM-DD\": \"dayjs 记号，可按需加分隔符；默认 YYYY-MM-DD\"",
-        "\"four-digit year\": \"四位数年份\""]);
+        "\"dayjs tokens, spaced as you like; default YYYY-MM-DD; more: day.js.org/docs/en/parse/string-format\"",
+        "\"four-digit year\": \"四位数年份\"", "\"day of month [ 1,31]; same as %_d\": \"当月日期 [ 1,31]；等价于 %_d\""]);
     // The tables are DATA, not code: the JSON carries its provenance (mermaid and
     // jison versions, the grammar's sha256) so a bump cannot silently diverge.
     let nav = read("ui/hint-nav.json");

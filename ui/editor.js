@@ -1545,12 +1545,21 @@ const Ed = {
       const ga = MH.helpOf(["gantt"], "dateFormat ", null);
       if (!ga || ga.sections.length !== 1 || ga.sections[0].name !== "Date format") fail("help:gantt");
       if (!ga.sections[0].note || !ga.sections[0].items.some(x => x.ins === "YYYY")) fail("help:gantt2");
+      // the value is a table, not a chip soup: one row per meaning, a printed
+      // example and sentence on every row, and the dayjs page's full list
+      // (including `DDDD`, the token whose literal the minified bundle lacks)
+      if (ga.sections[0].items.filter(x => x.first).length !== 20 ||
+          ga.sections[0].items.length !== 30 ||
+          !ga.sections[0].items.some(x => x.ins === "DDDD")) fail("help:gantt9");
+      if (!ga.sections[0].items.filter(x => x.first).every(x => x.hint && x.ex)) fail("help:gantt10");
       const ga2 = MH.helpOf(["gantt"], "dateFormat YYY", null);
       if (!ga2 || ga2.sections[0].name !== "Date format") fail("help:gantt3");
       if (MH.helpOf(["gantt"], "title My", null)) fail("help:gantt4");          // prose value: quiet
       if (MH.helpOf(["gantt"], "task Build", null)) fail("help:gantt5");
       const ax = MH.helpOf(["gantt"], "axisFormat ", null);
       if (!ax || ax.sections[0].items[0].ins !== "%Y-%m-%d") fail("help:axis");
+      const axRows = ax.sections[0].items.filter(x => x.first);
+      if (axRows.length !== 25 || !axRows.every(x => x.hint && x.ex)) fail("help:axis2");
       const ex = MH.helpOf(["gantt"], "excludes ", null);
       if (!ex || !ex.sections[0].items.some(x => x.ins === "weekend")) fail("help:excl");
       if (!MH.helpOf(["gantt"], "gantt", null).sections.length) fail("help:gantt6");  // the directive line itself
